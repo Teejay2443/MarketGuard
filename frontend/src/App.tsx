@@ -1,6 +1,13 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Shield, Mic, MicOff, Send, MessageSquare, Package,
+  Receipt, AlertTriangle, CheckCircle2, LogOut, TrendingUp,
+  CircleDollarSign, Users, Sparkles,
+  ArrowRight, Loader2, Clock, BarChart3,
+} from "lucide-react";
 import "./App.css";
 
+/* ─── Types ─── */
 interface Item {
   name: string;
   quantity: number;
@@ -38,21 +45,20 @@ interface Product {
 
 const BACKEND_URL = "http://localhost:8000";
 
+/* ─── Auth helpers ─── */
 function getToken(): string | null {
   return localStorage.getItem("marketguard_token");
 }
-
-function setToken(t: string) {
+function setTokenLocal(t: string) {
   localStorage.setItem("marketguard_token", t);
 }
-
 function clearToken() {
   localStorage.removeItem("marketguard_token");
 }
 
 async function apiFetch(path: string, options: RequestInit = {}) {
   const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string> || {}),
+    ...(options.headers as Record<string, string>),
   };
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -67,22 +73,22 @@ async function apiFetch(path: string, options: RequestInit = {}) {
   return res;
 }
 
+/* ─── App ─── */
 export default function App() {
-  // Auth states
   const [token, setTokenState] = useState<string | null>(getToken());
   const [user, setUser] = useState<{ id: number; username: string; display_name: string } | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [transcription, setTranscription] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // App states
+
   const [mode, setMode] = useState("local");
   const [inventory, setInventory] = useState<Product[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -92,7 +98,6 @@ export default function App() {
     warnings: string[];
   } | null>(null);
 
-  // Q&A states
   const [queryInput, setQueryInput] = useState("");
   const [queryLoading, setQueryLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<{ q: string; a: string }[]>([]);
@@ -110,14 +115,16 @@ export default function App() {
     }
   }, [token]);
 
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory]);
+
   const fetchMode = async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/health`);
       const data = await res.json();
       if (data.mode) setMode(data.mode);
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   };
 
   const fetchInventory = async () => {
@@ -140,7 +147,6 @@ export default function App() {
     }
   };
 
-  // --- Auth ---
   const fetchMe = async () => {
     try {
       const res = await apiFetch("/auth/me");
@@ -150,7 +156,11 @@ export default function App() {
 
   const doAuth = async () => {
     setAuthError("");
-    if (authPassword.length < 4) { setAuthError("Password must be at least 4 characters"); return; }
+    if (authPassword.length < 4) {
+      setAuthError("Password must be at least 4 characters");
+      return;
+    }
+    setAuthLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/auth/${authMode}`, {
         method: "POST",
@@ -163,11 +173,13 @@ export default function App() {
         return;
       }
       const data = await res.json();
-      setToken(data.token);
+      setTokenLocal(data.token);
       setTokenState(data.token);
       setUser(data.user);
     } catch {
       setAuthError("Connection failed. Is the backend running?");
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -181,7 +193,79 @@ export default function App() {
     setChatHistory([]);
   };
 
-  const sendQuery = async () => {
+  const startRecording = async () => {
+    setError(null);
+    audioChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        setAudioUrl(URL.createObjectURL(blob));
+        uploadAudio(blob);
+      };
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch {
+      setError("Microphone access denied or not supported.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
+      setIsRecording(false);
+    }
+  };
+
+  const uploadAudio = async (blob: Blob) => {
+    setIsLoading(true);
+    setError(null);
+    const fd = new FormData();
+    fd.append("file", blob, "recording.wav");
+    try {
+      const res = await apiFetch("/transcribe", { method: "POST", body: fd });
+      if (!res.ok) throw new Error("STT server error");
+      const data = await res.json();
+      setTranscription(data.transcription);
+    } catch {
+      setError("Failed to transcribe audio. Ensure backend is running.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const processTextIntent = async () => {
+    if (!transcription.trim()) return;
+    setIsLoading(true);
+    setError(null);
+    setParsedResult(null);
+    try {
+      const res = await apiFetch("/process-intent", {
+        method: "POST",
+        body: JSON.stringify({ text: transcription }),
+      });
+      if (!res.ok) {
+        const detail = await res.json();
+        throw new Error(detail.detail || "LLM server error");
+      }
+      const data = await res.json();
+      setParsedResult(data);
+      fetchInventory();
+      fetchTransactions();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to process transaction.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const sendQuery = useCallback(async () => {
     const q = queryInput.trim();
     if (!q || queryLoading) return;
     setQueryLoading(true);
@@ -199,373 +283,436 @@ export default function App() {
         updated[updated.length - 1] = { q, a: data.answer };
         return updated;
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setChatHistory((prev) => {
         const updated = [...prev];
-        updated[updated.length - 1] = { q, a: `Sorry, I couldn't answer that. ${err.message}` };
+        updated[updated.length - 1] = { q, a: `Sorry, I couldn't answer that. ${err instanceof Error ? err.message : ""}` };
         return updated;
       });
     } finally {
       setQueryLoading(false);
     }
-  };
+  }, [queryInput, queryLoading]);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory]);
+  /* ─── Computed stats ─── */
+  const totalSales = transactions
+    .filter((t) => t.type === "SALE" || t.type === "CREDIT")
+    .reduce((sum, t) => sum + t.total_amount, 0);
+  const totalOwed = transactions.reduce((sum, t) => sum + t.amount_owed, 0);
+  const transactionCount = transactions.length;
 
-  const startRecording = async () => {
-    setError(null);
-    audioChunksRef.current = [];
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
-        const url = URL.createObjectURL(audioBlob);
-        setAudioUrl(url);
-        uploadAudio(audioBlob);
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (err) {
-      setError("Microphone access denied or not supported.");
-      console.error(err);
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      // Stop all audio tracks to release microphone
-      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-      setIsRecording(false);
-    }
-  };
-
-  const uploadAudio = async (blob: Blob) => {
-    setIsLoading(true);
-    setError(null);
-    const formData = new FormData();
-    formData.append("file", blob, "recording.wav");
-
-    try {
-      const res = await apiFetch("/transcribe", { method: "POST", body: formData });
-      if (!res.ok) throw new Error("STT server error");
-      const data = await res.json();
-      setTranscription(data.transcription);
-    } catch (err) {
-      setError("Failed to transcribe audio. Ensure backend is running.");
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const processTextIntent = async () => {
-    if (!transcription.trim()) return;
-    setIsLoading(true);
-    setError(null);
-    setParsedResult(null);
-
-    try {
-      const res = await apiFetch("/process-intent", {
-        method: "POST",
-        body: JSON.stringify({ text: transcription }),
-      });
-      if (!res.ok) {
-        const detail = await res.json();
-        throw new Error(detail.detail || "LLM server error");
-      }
-      const data = await res.json();
-      setParsedResult(data);
-      fetchInventory();
-      fetchTransactions();
-    } catch (err: any) {
-      setError(err.message || "Failed to process transaction with Gemma.");
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="app-container">
-
-      {!token ? (
-        <div className="landing-page">
-          {/* Hero */}
-          <section className="landing-hero">
-            <div className="landing-hero-content">
-              <span className="landing-shield">🛡️</span>
-              <h1>MarketGuard</h1>
-              <p className="landing-tagline">Your business speaks. AI remembers.</p>
-              <p className="landing-desc">
-                The voice-powered business assistant for Nigeria's informal economy.
-                No typing. No complicated forms. Just talk naturally in English, Pidgin, or Yoruba.
-              </p>
-              <div className="landing-cta">
-                <button className="btn btn-primary" onClick={() => setAuthMode("register")}>Get Started Free</button>
-                <button className="btn btn-landing-secondary" onClick={() => setAuthMode("login")}>Sign In</button>
-              </div>
+  /* ─── Landing Page ─── */
+  if (!token) {
+    return (
+      <div className="landing-page">
+        {/* Nav */}
+        <nav className="landing-nav">
+          <div className="landing-logo">
+            <div className="logo-mark">
+              <Shield size={18} color="white" />
             </div>
-            <div className="landing-hero-visual">
-              <div className="landing-phone-mockup">
-                <div className="landing-phone-header">🎤 Speak</div>
-                <div className="landing-phone-body">
-                  <div className="landing-phone-msg user-msg">"I sell two bags of rice to Mama Ngozi for 96,000"</div>
-                  <div className="landing-phone-msg ai-msg">✅ Recorded: SALE — 2 Rice, ₦96,000. Stock updated.</div>
+            <span>MarketGuard</span>
+          </div>
+          <div className="landing-nav-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setAuthMode("login")}>
+              Sign In
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setAuthMode("register")}>
+              Get Started
+            </button>
+          </div>
+        </nav>
+
+        {/* Hero */}
+        <section className="landing-hero">
+          <div className="hero-content">
+            <div className="hero-badge">
+              <span className="badge-dot" />
+              Powered by Gemma 4
+            </div>
+            <h1>
+              Your business speaks.<br />
+              <span className="gradient-text">AI remembers.</span>
+            </h1>
+            <p className="hero-desc">
+              The voice-powered business assistant for Nigeria's informal economy.
+              No typing. No complicated forms. Just talk naturally in English,
+              Pidgin, or Yoruba.
+            </p>
+            <div className="hero-actions">
+              <button className="btn btn-primary" onClick={() => setAuthMode("register")}>
+                Start Free <ArrowRight size={16} />
+              </button>
+              <button className="btn btn-secondary" onClick={() => setAuthMode("login")}>
+                Sign In
+              </button>
+            </div>
+          </div>
+          <div className="hero-visual">
+            <div className="phone-mockup">
+              <div className="phone-notch">
+                <div className="phone-notch-bar" />
+              </div>
+              <div className="phone-header">
+                <Mic size={16} />
+                Voice Transaction
+              </div>
+              <div className="phone-body">
+                <div className="phone-msg phone-msg-user">
+                  "I sell two bags of rice to Mama Ngozi for 96,000"
+                </div>
+                <div className="phone-msg phone-msg-ai success">
+                  ✅ Recorded: SALE — 2 Rice, ₦96,000. Stock updated.
+                </div>
+                <div className="phone-msg phone-msg-user">
+                  "How much did I sell today?"
+                </div>
+                <div className="phone-msg phone-msg-ai">
+                  You sold ₦152,000 today across 3 transactions.
                 </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* Features */}
-          <section className="landing-features">
+        {/* Features */}
+        <section className="landing-features">
+          <div className="section-header">
             <h2>How it works</h2>
-            <div className="features-grid">
-              <div className="feature-card">
-                <span className="feature-icon">🎤</span>
-                <h3>Speak Naturally</h3>
-                <p>Talk in English, Nigerian Pidgin, or Yoruba. MarketGuard understands you.</p>
+            <p>Speak naturally. MarketGuard handles the rest.</p>
+          </div>
+          <div className="features-grid">
+            <div className="feature-card">
+              <div className="feature-icon"><Mic size={20} /></div>
+              <h3>Speak Naturally</h3>
+              <p>Talk in English, Nigerian Pidgin, or Yoruba. MarketGuard understands you.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><Sparkles size={20} /></div>
+              <h3>AI Processes</h3>
+              <p>Gemma 4 extracts sales, debts, restocks — no forms to fill.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><BarChart3 size={20} /></div>
+              <h3>Instant Records</h3>
+              <p>Transactions saved, inventory updated, debts tracked — automatically.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><AlertTriangle size={20} /></div>
+              <h3>Smart Alerts</h3>
+              <p>Get warned when you sell below cost or when customers owe you money.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><MessageSquare size={20} /></div>
+              <h3>Ask Questions</h3>
+              <p>"How much did I sell today?" "Who owes me?" — get instant answers.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><Shield size={20} /></div>
+              <h3>Privacy First</h3>
+              <p>Your data is yours. Each trader has their own private workspace.</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Demo Accounts */}
+        <section className="landing-demo">
+          <div className="section-header">
+            <h2>Try it now</h2>
+            <p>Use these demo accounts to explore MarketGuard.</p>
+          </div>
+          <div className="demo-cards">
+            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_a"); setAuthPassword("pass1234"); }}>
+              <span className="demo-user">trader_a</span>
+              <span className="demo-pass">pass1234</span>
+            </div>
+            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_b"); setAuthPassword("pass1234"); }}>
+              <span className="demo-user">trader_b</span>
+              <span className="demo-pass">pass1234</span>
+            </div>
+            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_c"); setAuthPassword("pass1234"); }}>
+              <span className="demo-user">trader_c</span>
+              <span className="demo-pass">pass1234</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Auth */}
+        <section className="landing-auth">
+          <div className="card auth-card">
+            <h2>{authMode === "login" ? "Welcome back" : "Create your account"}</h2>
+            <p className="auth-subtitle">
+              {authMode === "login" ? "Sign in to your workspace" : "No email needed. Just a username and password."}
+            </p>
+            {authError && <div className="error-banner"><AlertTriangle size={14} /> {authError}</div>}
+            <div className="auth-fields">
+              <div className="text-field">
+                <label>Username</label>
+                <input
+                  placeholder="Enter your username"
+                  value={authUsername}
+                  onChange={(e) => setAuthUsername(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }}
+                  autoFocus
+                />
               </div>
-              <div className="feature-card">
-                <span className="feature-icon">🧠</span>
-                <h3>AI Processes</h3>
-                <p>Gemma 4 extracts sales, debts, restocks — no forms to fill.</p>
-              </div>
-              <div className="feature-card">
-                <span className="feature-icon">📊</span>
-                <h3>Instant Records</h3>
-                <p>Transactions saved, inventory updated, debts tracked — automatically.</p>
-              </div>
-              <div className="feature-card">
-                <span className="feature-icon">⚠️</span>
-                <h3>Smart Alerts</h3>
-                <p>Get warned when you sell below cost or when customers owe you money.</p>
-              </div>
-              <div className="feature-card">
-                <span className="feature-icon">💬</span>
-                <h3>Ask Questions</h3>
-                <p>"How much did I sell today?" "Who owes me?" — get instant answers.</p>
-              </div>
-              <div className="feature-card">
-                <span className="feature-icon">🔒</span>
-                <h3>Privacy First</h3>
-                <p>Your data is yours. Each trader has their own private workspace.</p>
+              <div className="text-field">
+                <label>Password</label>
+                <input
+                  type="password"
+                  placeholder="4+ characters"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }}
+                />
               </div>
             </div>
-          </section>
+            <button className="btn btn-primary btn-full" onClick={doAuth} disabled={authLoading} style={{ marginTop: 16 }}>
+              {authLoading ? <Loader2 size={16} className="spin" /> : authMode === "login" ? "Sign In" : "Create Account"}
+            </button>
+            <p className="auth-toggle">
+              {authMode === "login" ? (
+                <>Don't have an account?{" "}<a onClick={() => { setAuthMode("register"); setAuthError(""); }}>Create one</a></>
+              ) : (
+                <>Already have an account?{" "}<a onClick={() => { setAuthMode("login"); setAuthError(""); }}>Sign in</a></>
+              )}
+            </p>
+          </div>
+        </section>
 
-          {/* Test accounts */}
-          <section className="landing-test-accounts">
-            <h2>Try it now — Demo accounts</h2>
-            <p>No signup needed. Use these test accounts to explore MarketGuard:</p>
-            <div className="test-accounts-grid">
-              <div className="test-account-card">
-                <strong>trader_a</strong> / pass1234
-              </div>
-              <div className="test-account-card">
-                <strong>trader_b</strong> / pass1234
-              </div>
-              <div className="test-account-card">
-                <strong>trader_c</strong> / pass1234
-              </div>
-            </div>
-          </section>
+        {/* Footer */}
+        <footer className="landing-footer">
+          <p><span className="footer-brand">MarketGuard</span> — Built for Nigeria's 40 million micro-merchants</p>
+          <p>Powered by Gemma 4. Hackathon MVP.</p>
+        </footer>
+      </div>
+    );
+  }
 
-          {/* Login/Register */}
-          <section className="landing-auth-section">
-            <div className="auth-box">
-              <h2>{authMode === "login" ? "Sign In" : "Create Account"}</h2>
-              <p className="section-desc">No email needed. Just pick a username and password.</p>
-              {authError && <div className="error-message">⚠️ {authError}</div>}
-              <input className="auth-input" placeholder="Username" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
-              <input className="auth-input" type="password" placeholder="Password (4+ characters)" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
-              <button className="btn btn-primary auth-btn" onClick={doAuth}>
-                {authMode === "login" ? "Sign In" : "Create Account"}
-              </button>
-              <p className="auth-toggle">
-                {authMode === "login" ? (
-                  <>Don't have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("register"); setAuthError(""); }}>Create one</a></>
-                ) : (
-                  <>Already have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("login"); setAuthError(""); }}>Sign in</a></>
-                )}
-              </p>
-            </div>
-          </section>
-
-          {/* Footer */}
-          <footer className="landing-footer">
-            <p>MarketGuard — Built for Nigeria's 40 million micro-merchants</p>
-            <p>Powered by Gemma 4. Hackathon MVP.</p>
-          </footer>
-        </div>
-      ) : (
-        <>
+  /* ─── Dashboard ─── */
+  return (
+    <div className="app-container">
+      {/* Header */}
       <header className="app-header">
         <div className="logo-section">
-          <div className="shield-icon">🛡️</div>
+          <div className="logo-mark">
+            <Shield size={20} color="white" />
+          </div>
           <div>
             <h1>MarketGuard</h1>
-            <p className="subtitle">Voice Auditor for the Informal Economy</p>
+            <span className="header-subtitle">Voice Auditor for the Informal Economy</span>
           </div>
         </div>
         <div className="header-right">
-          {user && <span className="user-name">{user.display_name || user.username}</span>}
-          <div className="offline-badge">
-            <span className="dot"></span> {mode === "cloud" ? "Cloud Mode" : "Local Mode"}
+          <div className="mode-badge">
+            <span className="pulse-dot" />
+            {mode === "cloud" ? "Cloud" : "Local"}
           </div>
-          <button className="btn btn-logout" onClick={logout}>Logout</button>
+          {user && (
+            <div className="user-chip">
+              <div className="avatar">{(user.display_name || user.username)[0].toUpperCase()}</div>
+              {user.display_name || user.username}
+            </div>
+          )}
+          <button className="btn-ghost" onClick={logout}>
+            <LogOut size={14} />
+            Sign out
+          </button>
         </div>
       </header>
 
-      <main className="app-grid">
-        {/* Left Column: Voice Recording and Intent Extraction */}
-        <section className="card voice-section">
-          <h2>Record Transaction</h2>
-          <p className="section-desc">Speak in Yoruba, Pidgin, or English to log sales or restocks.</p>
-          
-          <div className="voice-controller">
-            <button 
-              className={`mic-button ${isRecording ? "recording" : ""}`}
-              onClick={isRecording ? stopRecording : startRecording}
-              disabled={isLoading}
-            >
-              <span className="mic-icon">🎤</span>
-            </button>
-            <p className="mic-status">
-              {isRecording ? "Listening... Click to Stop" : "Click to Speak"}
+      {/* Stats Row */}
+      <div className="stats-row" style={{ marginBottom: "var(--sp-6)" }}>
+        <div className="stat-card">
+          <div className="stat-label"><TrendingUp size={14} /> Total Sales</div>
+          <div className="stat-value sale">₦{totalSales.toLocaleString()}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label"><CircleDollarSign size={14} /> Outstanding</div>
+          <div className="stat-value danger">₦{totalOwed.toLocaleString()}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label"><Receipt size={14} /> Transactions</div>
+          <div className="stat-value">{transactionCount}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label"><Package size={14} /> Products</div>
+          <div className="stat-value info">{inventory.length}</div>
+        </div>
+      </div>
+
+      {/* Main Grid */}
+      <div className="dashboard-grid">
+        {/* Voice Recording */}
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title"><Mic size={18} /> Record Transaction</div>
+              <div className="card-subtitle">Speak in Yoruba, Pidgin, or English</div>
+            </div>
+          </div>
+
+          <div className="voice-area">
+            <div className="mic-wrapper">
+              <button
+                className={`mic-button ${isRecording ? "recording" : ""}`}
+                onClick={isRecording ? stopRecording : startRecording}
+                disabled={isLoading}
+              >
+                {isRecording ? <MicOff size={32} /> : <Mic size={32} />}
+              </button>
+              <div className="mic-ring" />
+            </div>
+            <p className={`mic-label ${isRecording ? "recording" : ""}`}>
+              {isRecording ? "Listening... Click to stop" : isLoading ? "Processing..." : "Click to speak"}
             </p>
           </div>
 
           {audioUrl && (
-            <div className="audio-playback">
+            <div className="audio-player">
               <audio src={audioUrl} controls />
             </div>
           )}
 
-          {error && <div className="error-message">⚠️ {error}</div>}
+          {error && (
+            <div className="error-banner">
+              <AlertTriangle size={14} /> {error}
+            </div>
+          )}
 
-          <div className="transcription-box">
-            <label htmlFor="transcription-input">Transcription (Edit if needed):</label>
+          <div className="input-group">
+            <label className="input-label" htmlFor="transcription-input">Transcription</label>
             <textarea
               id="transcription-input"
+              className="textarea-field"
               value={transcription}
               onChange={(e) => setTranscription(e.target.value)}
               placeholder="Your spoken transaction will appear here..."
               disabled={isLoading}
             />
-            <button 
-              className="btn btn-primary"
+            <button
+              className="btn btn-primary btn-full"
               onClick={processTextIntent}
               disabled={isLoading || !transcription.trim()}
             >
-              {isLoading ? "Processing with Gemma..." : "Confirm & Parse Transaction"}
+              {isLoading ? (
+                <><Loader2 size={16} className="spin" /> Processing with Gemma...</>
+              ) : (
+                <><CheckCircle2 size={16} /> Confirm & Parse Transaction</>
+              )}
             </button>
           </div>
-        </section>
+        </div>
 
-        {/* Right Column: Gemma Output & Business Intelligence Alerts */}
-        <section className="card results-section">
-          <h2>Merchant Intelligence & Alerts</h2>
-          
+        {/* Parsed Output / Alerts */}
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title"><Sparkles size={18} /> Intelligence & Alerts</div>
+              <div className="card-subtitle">AI-decoded transaction details</div>
+            </div>
+          </div>
+
           {parsedResult ? (
-            <div className="parsed-output animate-fade-in">
-              <div className="audit-header">
+            <div className="parsed-output">
+              <div className="parsed-header">
                 <h3>Transaction Decoded</h3>
                 <span className={`badge badge-${parsedResult.parsed_data.type}`}>
                   {parsedResult.parsed_data.type}
                 </span>
               </div>
-              
-              <div className="details-list">
-                <p><strong>Customer:</strong> {parsedResult.parsed_data.customer_name || "General/Cash"}</p>
-                <p><strong>Total Value:</strong> ₦{parsedResult.parsed_data.total_amount.toLocaleString()}</p>
-                <p><strong>Amount Paid:</strong> ₦{parsedResult.parsed_data.amount_paid.toLocaleString()}</p>
-                <p><strong>Amount Owed:</strong> ₦{parsedResult.parsed_data.amount_owed.toLocaleString()}</p>
+
+              <div className="detail-grid">
+                <div className="detail-item">
+                  <span className="detail-label">Customer</span>
+                  <span className="detail-value">{parsedResult.parsed_data.customer_name || "General / Cash"}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Total Value</span>
+                  <span className="detail-value highlight">₦{parsedResult.parsed_data.total_amount.toLocaleString()}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Amount Paid</span>
+                  <span className="detail-value">₦{parsedResult.parsed_data.amount_paid.toLocaleString()}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Amount Owed</span>
+                  <span className={`detail-value ${parsedResult.parsed_data.amount_owed > 0 ? "danger" : ""}`}>
+                    ₦{parsedResult.parsed_data.amount_owed.toLocaleString()}
+                  </span>
+                </div>
               </div>
 
-              <h4>Items:</h4>
-              <ul className="items-list">
+              <div className="items-section">
+                <h4>Items</h4>
                 {parsedResult.parsed_data.items.map((item, idx) => (
-                  <li key={idx}>
-                    <span>{item.name} x {item.quantity}</span>
-                    <span>₦{(item.quantity * item.unit_price).toLocaleString()}</span>
-                  </li>
+                  <div className="item-row" key={idx}>
+                    <span className="item-name">{item.name} × {item.quantity}</span>
+                    <span className="item-price">₦{(item.quantity * item.unit_price).toLocaleString()}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
 
               {parsedResult.warnings && parsedResult.warnings.length > 0 ? (
-                <div className="warnings-container">
-                  <h4>⚠️ Audit Alerts (Revenue Leakage Detected)</h4>
+                <div className="warnings-box">
+                  <h4><AlertTriangle size={14} /> Audit Alerts</h4>
                   <ul>
                     {parsedResult.warnings.map((w, idx) => (
-                      <li key={idx} className="warning-item">{w}</li>
+                      <li key={idx}>{w}</li>
                     ))}
                   </ul>
                 </div>
               ) : (
                 <div className="clean-audit">
-                  ✅ Audit clean. Prices match restock rates!
+                  <CheckCircle2 size={16} /> Audit clean — prices match restock rates
                 </div>
               )}
             </div>
           ) : (
             <div className="empty-state">
-              <span className="empty-icon">📊</span>
-              <p>No transaction parsed yet. Record or type a transaction to audit it.</p>
+              <div className="empty-icon"><BarChart3 size={24} /></div>
+              <div className="empty-title">No transaction parsed yet</div>
+              <div className="empty-desc">Record or type a transaction to see AI-powered analysis here.</div>
             </div>
           )}
-        </section>
+        </div>
 
-        {/* Full Width Bottom Column: Inventory & History */}
-        <section className="card table-card full-width">
-          <div className="tabs-header">
-            <h2>Local Ledger (Transaction History)</h2>
+        {/* Transaction History */}
+        <div className="card span-full">
+          <div className="card-header">
+            <div>
+              <div className="card-title"><Clock size={18} /> Transaction History</div>
+              <div className="card-subtitle">All recorded transactions</div>
+            </div>
           </div>
-          
-          <div className="table-responsive">
-            <table className="ledger-table">
+          <div className="table-wrapper">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Time</th>
                   <th>Type</th>
                   <th>Customer</th>
                   <th>Items</th>
-                  <th>Total</th>
-                  <th>Paid</th>
-                  <th>Owed</th>
+                  <th className="text-right">Total</th>
+                  <th className="text-right">Paid</th>
+                  <th className="text-right">Owed</th>
                 </tr>
               </thead>
               <tbody>
                 {transactions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center">No transactions recorded yet.</td>
+                    <td colSpan={7} className="table-empty">No transactions recorded yet.</td>
                   </tr>
                 ) : (
                   transactions.map((tx) => (
                     <tr key={tx.id}>
-                      <td>{new Date(tx.timestamp).toLocaleTimeString()}</td>
-                      <td>
-                        <span className={`badge badge-${tx.type}`}>{tx.type}</span>
-                      </td>
-                      <td>{tx.customer_name || "General"}</td>
-                      <td>
-                        {tx.items?.map((it) => `${it.name} (${it.quantity})`).join(", ") || "-"}
-                      </td>
-                      <td>₦{tx.total_amount.toLocaleString()}</td>
-                      <td>₦{tx.amount_paid.toLocaleString()}</td>
-                      <td className={tx.amount_owed > 0 ? "text-danger" : ""}>
+                      <td><Clock size={12} style={{ marginRight: 6, opacity: 0.4 }} />{new Date(tx.timestamp).toLocaleTimeString()}</td>
+                      <td><span className={`badge badge-${tx.type}`}>{tx.type}</span></td>
+                      <td className="text-primary">{tx.customer_name || "General"}</td>
+                      <td>{tx.items?.map((it) => `${it.name} (${it.quantity})`).join(", ") || "—"}</td>
+                      <td className="text-right text-primary">₦{tx.total_amount.toLocaleString()}</td>
+                      <td className="text-right">₦{tx.amount_paid.toLocaleString()}</td>
+                      <td className={`text-right ${tx.amount_owed > 0 ? "text-danger" : ""}`}>
                         ₦{tx.amount_owed.toLocaleString()}
                       </td>
                     </tr>
@@ -574,53 +721,76 @@ export default function App() {
               </tbody>
             </table>
           </div>
-        </section>
+        </div>
 
-        <section className="card table-card full-width">
-          <h2>Product Inventory & Cost Baseline</h2>
-          
-          <div className="table-responsive">
-            <table className="ledger-table">
+        {/* Inventory */}
+        <div className="card span-full">
+          <div className="card-header">
+            <div>
+              <div className="card-title"><Package size={18} /> Product Inventory</div>
+              <div className="card-subtitle">Stock levels and cost baselines</div>
+            </div>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
               <thead>
                 <tr>
-                  <th>Product Name</th>
-                  <th>Current Stock</th>
+                  <th>Product</th>
+                  <th className="text-right">Stock</th>
                   <th>Unit</th>
-                  <th>Restock Cost Price</th>
-                  <th>Selling Price Limit</th>
+                  <th className="text-right">Cost Price</th>
+                  <th className="text-right">Selling Price</th>
                 </tr>
               </thead>
               <tbody>
-                {inventory.map((prod) => (
-                  <tr key={prod.id}>
-                    <td>{prod.name}</td>
-                    <td>{prod.stock_quantity}</td>
-                    <td>{prod.unit}</td>
-                    <td>₦{prod.cost_price.toLocaleString()}</td>
-                    <td>₦{prod.selling_price.toLocaleString()}</td>
+                {inventory.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="table-empty">No products in inventory yet.</td>
                   </tr>
-                ))}
+                ) : (
+                  inventory.map((prod) => (
+                    <tr key={prod.id}>
+                      <td className="text-primary">{prod.name}</td>
+                      <td className="text-right">{prod.stock_quantity}</td>
+                      <td>{prod.unit}</td>
+                      <td className="text-right">₦{prod.cost_price.toLocaleString()}</td>
+                      <td className="text-right">₦{prod.selling_price.toLocaleString()}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
-        </section>
+        </div>
 
-        {/* Q&A Section */}
-        <section className="card full-width">
-          <h2>Ask Your Business</h2>
-          <p className="section-desc">Ask questions like "Who owes me?" or "How much did I sell today?"</p>
-          <div className="chat-box">
+        {/* Q&A Chat */}
+        <div className="card span-full">
+          <div className="card-header">
+            <div>
+              <div className="card-title"><MessageSquare size={18} /> Ask Your Business</div>
+              <div className="card-subtitle">Ask anything — "Who owes me?" "How much did I sell today?"</div>
+            </div>
+          </div>
+
+          <div className="chat-container">
             {chatHistory.length === 0 ? (
               <div className="chat-empty">
-                <span className="empty-icon">💬</span>
-                <p>Ask a question about your business to get started.</p>
+                <div className="empty-icon"><MessageSquare size={24} /></div>
+                <div className="empty-title">Ask a question</div>
+                <div className="empty-desc">Get instant answers about your sales, debts, and inventory.</div>
               </div>
             ) : (
               <div className="chat-messages">
                 {chatHistory.map((msg, idx) => (
-                  <div key={idx} className="chat-message">
-                    <div className="chat-msg chat-msg-user">{msg.q}</div>
-                    <div className="chat-msg chat-msg-ai">{msg.a}</div>
+                  <div className="chat-msg-group" key={idx}>
+                    <div className="chat-bubble chat-bubble-user">
+                      <Users size={12} style={{ marginRight: 6, opacity: 0.7 }} />
+                      {msg.q}
+                    </div>
+                    <div className="chat-bubble chat-bubble-ai">
+                      <Sparkles size={12} style={{ marginRight: 6, opacity: 0.5 }} />
+                      {msg.a}
+                    </div>
                   </div>
                 ))}
                 <div ref={chatEndRef} />
@@ -632,18 +802,30 @@ export default function App() {
                 value={queryInput}
                 onChange={(e) => setQueryInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendQuery(); }}
-                placeholder="Ask a question..."
+                placeholder="Ask a question about your business..."
                 disabled={queryLoading}
               />
-              <button className="btn btn-primary" onClick={sendQuery} disabled={queryLoading || !queryInput.trim()}>
-                {queryLoading ? "..." : "Ask"}
+              <button
+                className="btn btn-primary"
+                onClick={sendQuery}
+                disabled={queryLoading || !queryInput.trim()}
+              >
+                {queryLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
               </button>
             </div>
           </div>
-        </section>
-      </main>
-      </>
-      )}
+        </div>
+      </div>
+
+      {/* Spin animation */}
+      <style>{`
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
