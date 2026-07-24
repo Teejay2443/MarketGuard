@@ -569,8 +569,8 @@ export default function App() {
           </div>
           <div className="landing-nav-actions">
             <ThemeToggle />
-            <button className="btn btn-ghost btn-sm" onClick={() => setAuthMode("login")}>Sign In</button>
-            <button className="btn btn-primary btn-sm" onClick={() => setAuthMode("register")}>Get Started</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setAuthMode("login"); setAuthError(""); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 99999, behavior: "smooth" }); }}>Sign In</button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setAuthMode("register"); setAuthError(""); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 99999, behavior: "smooth" }); }}>Get Started</button>
           </div>
         </nav>
 
@@ -583,8 +583,8 @@ export default function App() {
               No typing. No complicated forms. Just talk naturally in English, Pidgin, or Yoruba.
             </p>
             <div className="hero-actions">
-              <button className="btn btn-primary" onClick={() => setAuthMode("register")}>Start Free <ArrowRight size={16} /></button>
-              <button className="btn btn-secondary" onClick={() => setAuthMode("login")}>Sign In</button>
+              <button className="btn btn-primary" onClick={() => { setAuthMode("register"); setAuthError(""); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 99999, behavior: "smooth" }); }}>Start Free <ArrowRight size={16} /></button>
+              <button className="btn btn-secondary" onClick={() => { setAuthMode("login"); setAuthError(""); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 99999, behavior: "smooth" }); }}>Sign In</button>
             </div>
           </div>
           <div className="hero-visual">

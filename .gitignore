@@ -27,3 +27,7 @@ frontend/dist/
 *.swo
 *~
 .DS_Store
+
+# Presentations
+slides.md
+presentation.md
