@@ -27,10 +27,12 @@ def get_db_connection():
         if supa_pass:
             conn = psycopg2.connect(
                 host=os.getenv("SUPA_HOST", "db.gniherlifrnopuvqplzt.supabase.co"),
-                port=os.getenv("SUPA_PORT", "5432"),
+                port=os.getenv("SUPA_PORT", "6543"),
                 database=os.getenv("SUPA_DB", "postgres"),
                 user=os.getenv("SUPA_USER", "postgres"),
                 password=supa_pass,
+                sslmode="require",
+                connect_timeout=10,
                 cursor_factory=RealDictCursor
             )
             return conn
