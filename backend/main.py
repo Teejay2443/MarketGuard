@@ -23,7 +23,7 @@ auth_scheme = HTTPBearer(auto_error=False)
 # LLM_MODE = "cloud"  -> uses Gemini API (Gemma hosted)
 LLM_MODE = os.getenv("LLM_MODE", "cloud").lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-2.5-flash")
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemini-2.0-flash")
 
 # --- STT Mode Selection ---
 # STT_MODE = "local"  -> uses faster-whisper (runs locally, no API key needed)

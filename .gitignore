@@ -31,3 +31,5 @@ frontend/dist/
 # Presentations
 slides.md
 presentation.md
+*.pptx
+create_pptx.py
