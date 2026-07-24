@@ -3,7 +3,7 @@ import {
   Shield, Mic, MicOff, Send, MessageSquare, Package,
   Receipt, AlertTriangle, CheckCircle2, LogOut, TrendingUp,
   CircleDollarSign, Users, Sparkles,
-  ArrowRight, Loader2, Clock, BarChart3,
+  ArrowRight, Loader2, Clock, BarChart3, Sun, Moon,
 } from "lucide-react";
 import "./App.css";
 
@@ -75,6 +75,18 @@ async function apiFetch(path: string, options: RequestInit = {}) {
 
 /* ─── App ─── */
 export default function App() {
+  /* Theme: light default */
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    return (localStorage.getItem("marketguard_theme") as "light" | "dark") || "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("marketguard_theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((t) => (t === "light" ? "dark" : "light"));
+
   const [token, setTokenState] = useState<string | null>(getToken());
   const [user, setUser] = useState<{ id: number; username: string; display_name: string } | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -301,6 +313,12 @@ export default function App() {
   const totalOwed = transactions.reduce((sum, t) => sum + t.amount_owed, 0);
   const transactionCount = transactions.length;
 
+  const ThemeToggle = () => (
+    <button className="theme-toggle" onClick={toggleTheme} aria-label="Toggle theme">
+      {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
+    </button>
+  );
+
   /* ─── Landing Page ─── */
   if (!token) {
     return (
@@ -314,6 +332,7 @@ export default function App() {
             <span>MarketGuard</span>
           </div>
           <div className="landing-nav-actions">
+            <ThemeToggle />
             <button className="btn btn-ghost btn-sm" onClick={() => setAuthMode("login")}>
               Sign In
             </button>
@@ -419,26 +438,53 @@ export default function App() {
         <section className="landing-demo">
           <div className="section-header">
             <h2>Try it now</h2>
-            <p>Use these demo accounts to explore MarketGuard.</p>
+            <p>Click a demo account to auto-fill credentials.</p>
           </div>
           <div className="demo-cards">
-            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_a"); setAuthPassword("pass1234"); }}>
+            <button
+              type="button"
+              className="demo-card"
+              onClick={() => {
+                setAuthMode("login");
+                setAuthUsername("trader_a");
+                setAuthPassword("pass1234");
+                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
+              }}
+            >
               <span className="demo-user">trader_a</span>
               <span className="demo-pass">pass1234</span>
-            </div>
-            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_b"); setAuthPassword("pass1234"); }}>
+            </button>
+            <button
+              type="button"
+              className="demo-card"
+              onClick={() => {
+                setAuthMode("login");
+                setAuthUsername("trader_b");
+                setAuthPassword("pass1234");
+                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
+              }}
+            >
               <span className="demo-user">trader_b</span>
               <span className="demo-pass">pass1234</span>
-            </div>
-            <div className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_c"); setAuthPassword("pass1234"); }}>
+            </button>
+            <button
+              type="button"
+              className="demo-card"
+              onClick={() => {
+                setAuthMode("login");
+                setAuthUsername("trader_c");
+                setAuthPassword("pass1234");
+                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
+              }}
+            >
               <span className="demo-user">trader_c</span>
               <span className="demo-pass">pass1234</span>
-            </div>
+            </button>
           </div>
         </section>
 
         {/* Auth */}
-        <section className="landing-auth">
+        <section className="landing-auth" id="auth-section">
           <div className="card auth-card">
             <h2>{authMode === "login" ? "Welcome back" : "Create your account"}</h2>
             <p className="auth-subtitle">
@@ -504,6 +550,7 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
+          <ThemeToggle />
           <div className="mode-badge">
             <span className="pulse-dot" />
             {mode === "cloud" ? "Cloud" : "Local"}
