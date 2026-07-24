@@ -425,6 +425,60 @@ def add_transaction(user_id: int, tx_type, customer_name, total_amount, amount_p
         cursor.close()
         conn.close()
 
+def add_product(user_id: int, name: str, stock_quantity: float = 0, unit: str = "pcs", cost_price: float = 0, selling_price: float = 0):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ph = "?" if USE_SQLITE else "%s"
+    try:
+        cursor.execute(
+            f"INSERT INTO products (user_id, name, stock_quantity, unit, cost_price, selling_price) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})",
+            (user_id, name, stock_quantity, unit, cost_price, selling_price)
+        )
+        conn.commit()
+        pid = cursor.lastrowid if USE_SQLITE else cursor.fetchone()["id"]
+        return {"id": pid, "user_id": user_id, "name": name, "stock_quantity": stock_quantity, "unit": unit, "cost_price": cost_price, "selling_price": selling_price}
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+def update_product(product_id: int, user_id: int, updates: dict):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ph = "?" if USE_SQLITE else "%s"
+    allowed = {"name", "stock_quantity", "unit", "cost_price", "selling_price"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return None
+    set_clause = ", ".join(f"{k} = {ph}" for k in fields)
+    values = list(fields.values()) + [product_id, user_id]
+    try:
+        cursor.execute(
+            f"UPDATE products SET {set_clause} WHERE id = {ph} AND user_id = {ph}",
+            values
+        )
+        conn.commit()
+        return {"success": True, "updated": fields}
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+def delete_product(product_id: int, user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ph = "?" if USE_SQLITE else "%s"
+    try:
+        cursor.execute(f"DELETE FROM products WHERE id = {ph} AND user_id = {ph}", (product_id, user_id))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
 import hashlib
 import secrets
 

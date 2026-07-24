@@ -497,9 +497,108 @@ Transaction: {request.text}
 def get_inventory(user: dict = Depends(require_auth)):
     return database.get_all_products(user["id"])
 
+class ProductRequest(BaseModel):
+    name: str
+    stock_quantity: float = 0
+    unit: str = "pcs"
+    cost_price: float = 0
+    selling_price: float = 0
+
+class ProductUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    stock_quantity: Optional[float] = None
+    unit: Optional[str] = None
+    cost_price: Optional[float] = None
+    selling_price: Optional[float] = None
+
+@app.post("/inventory/add")
+def add_product(req: ProductRequest, user: dict = Depends(require_auth)):
+    return database.add_product(user["id"], req.name, req.stock_quantity, req.unit, req.cost_price, req.selling_price)
+
+@app.put("/inventory/{product_id}")
+def update_product(product_id: int, req: ProductUpdateRequest, user: dict = Depends(require_auth)):
+    return database.update_product(product_id, user["id"], req.model_dump(exclude_none=True))
+
+@app.delete("/inventory/{product_id}")
+def delete_product(product_id: int, user: dict = Depends(require_auth)):
+    database.delete_product(product_id, user["id"])
+    return {"success": True}
+
+@app.post("/inventory/import")
+async def import_inventory(file: UploadFile = File(...), user: dict = Depends(require_auth)):
+    content = await file.read()
+    text = content.decode("utf-8")
+    filename = file.filename or "import.csv"
+
+    imported = 0
+    errors = []
+
+    if filename.endswith(".json"):
+        try:
+            data = json.loads(text)
+            if not isinstance(data, list):
+                data = [data]
+            for i, item in enumerate(data):
+                try:
+                    database.add_product(
+                        user["id"],
+                        item.get("name", ""),
+                        item.get("stock_quantity", 0),
+                        item.get("unit", "pcs"),
+                        item.get("cost_price", 0),
+                        item.get("selling_price", 0),
+                    )
+                    imported += 1
+                except Exception as e:
+                    errors.append(f"Row {i+1}: {e}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    else:
+        import csv
+        import io
+        reader = csv.DictReader(io.StringIO(text))
+        for i, row in enumerate(reader):
+            try:
+                database.add_product(
+                    user["id"],
+                    row.get("name", ""),
+                    float(row.get("stock_quantity", 0)),
+                    row.get("unit", "pcs"),
+                    float(row.get("cost_price", 0)),
+                    float(row.get("selling_price", 0)),
+                )
+                imported += 1
+            except Exception as e:
+                errors.append(f"Row {i+1}: {e}")
+
+    return {"imported": imported, "errors": errors}
+
 @app.get("/transactions")
 def get_transactions(user: dict = Depends(require_auth)):
     return database.get_all_transactions(user["id"])
+
+class ManualTransactionRequest(BaseModel):
+    type: str
+    customer_name: Optional[str] = None
+    total_amount: float = 0
+    amount_paid: float = 0
+    amount_owed: float = 0
+    items: list = []
+
+@app.post("/transactions/manual")
+def manual_transaction(req: ManualTransactionRequest, user: dict = Depends(require_auth)):
+    if req.type not in ("SALE", "CREDIT", "RESTOCK"):
+        raise HTTPException(status_code=400, detail="Type must be SALE, CREDIT, or RESTOCK")
+    tx_id, warnings = database.add_transaction(
+        user["id"],
+        req.type,
+        req.customer_name,
+        req.total_amount,
+        req.amount_paid,
+        req.amount_owed,
+        [{"name": it.get("name", ""), "quantity": it.get("quantity", 1), "unit_price": it.get("unit_price", 0)} for it in req.items],
+    )
+    return {"transaction_id": tx_id, "warnings": warnings}
 
 COMPANION_PROMPT = """You are MarketGuard AI Companion — a friendly, knowledgeable business advisor for a Nigerian market trader.
 
