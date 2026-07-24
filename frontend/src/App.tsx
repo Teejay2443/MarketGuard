@@ -47,7 +47,7 @@ interface Product {
 
 type SidebarView = "dashboard" | "voice" | "manual" | "transactions" | "inventory" | "companion";
 
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 /* ─── Auth helpers ─── */
 function getToken(): string | null {
