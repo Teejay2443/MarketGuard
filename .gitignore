@@ -12,6 +12,9 @@ frontend/dist/
 # Environment
 .env
 .env.local
+.env.render
+.env.railway
+.env.vercel
 *.local
 
 # Database
