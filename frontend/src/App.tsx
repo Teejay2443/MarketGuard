@@ -5,6 +5,7 @@ import {
   CircleDollarSign, Users, Sparkles,
   ArrowRight, Loader2, Clock, BarChart3, Sun, Moon,
   LayoutDashboard, Bot, History, ClipboardList,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 import "./App.css";
 
@@ -88,6 +89,18 @@ export default function App() {
   }, [theme]);
 
   const toggleTheme = () => setTheme((t) => (t === "light" ? "dark" : "light"));
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem("marketguard_sidebar_collapsed") === "true";
+  });
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const newVal = !prev;
+      localStorage.setItem("marketguard_sidebar_collapsed", String(newVal));
+      return newVal;
+    });
+  };
 
   const [token, setTokenState] = useState<string | null>(getToken());
   const [user, setUser] = useState<{ id: number; username: string; display_name: string } | null>(null);
@@ -268,11 +281,14 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({ text: transcription }),
       });
-      if (!res.ok) {
-        const detail = await res.json();
-        throw new Error(detail.detail || "LLM server error");
-      }
       const data = await res.json();
+      if (!res.ok) {
+        const errorMsg = data.detail || "Failed to process transaction.";
+        if (res.status === 429) {
+          throw new Error("AI service is at capacity. Please try again in a moment.");
+        }
+        throw new Error(errorMsg);
+      }
       setParsedResult(data);
       fetchInventory();
       fetchTransactions();
@@ -294,8 +310,14 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({ question: q }),
       });
-      if (!res.ok) throw new Error("Companion query failed");
       const data = await res.json();
+      if (!res.ok) {
+        const errorMsg = data.detail || "Companion query failed";
+        if (res.status === 429) {
+          throw new Error("AI service is at capacity. Please try again in a moment.");
+        }
+        throw new Error(errorMsg);
+      }
       setCompanionHistory((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = { q, a: data.answer };
@@ -459,16 +481,6 @@ export default function App() {
               <span>{user.display_name || user.username}</span>
             </div>
           )}
-          <div className="mode-stack">
-            <div className="mode-badge">
-              <span className="pulse-dot" />
-              LLM: {mode === "cloud" ? "Cloud" : "Local"}
-            </div>
-            <div className="mode-badge stt">
-              <span className="pulse-dot" />
-              STT: {sttMode === "cloud" ? "Cloud" : "Local"}
-            </div>
-          </div>
           <div className="sidebar-footer-row">
             <ThemeToggle />
             <button className="btn-ghost" onClick={logout} title="Sign out"><LogOut size={14} /></button>

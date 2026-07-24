@@ -21,9 +21,9 @@ auth_scheme = HTTPBearer(auto_error=False)
 # --- Mode Selection ---
 # LLM_MODE = "local"  -> uses Ollama (Gemma 2B locally)
 # LLM_MODE = "cloud"  -> uses Gemini API (Gemma hosted)
-LLM_MODE = os.getenv("LLM_MODE", "local").lower()
+LLM_MODE = os.getenv("LLM_MODE", "cloud").lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-2.5-flash")
 
 # --- STT Mode Selection ---
 # STT_MODE = "local"  -> uses faster-whisper (runs locally, no API key needed)
@@ -83,15 +83,18 @@ Example output JSON:
 # Initialize cloud LLM client if in cloud mode
 genai_client = None
 if LLM_MODE == "cloud":
-    if not GEMINI_API_KEY:
-        raise RuntimeError("LLM_MODE=cloud but GEMINI_API_KEY is not set")
-    import google.generativeai as genai
-    genai.configure(api_key=GEMINI_API_KEY)
-    genai_client = genai.GenerativeModel(
-        GEMMA_MODEL,
-        system_instruction=PROMPT_TEMPLATE
-    )
-    print(f"Cloud mode: using {GEMMA_MODEL} via Gemini API")
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        genai_client = genai.GenerativeModel(
+            GEMMA_MODEL,
+            system_instruction=PROMPT_TEMPLATE
+        )
+        print(f"Cloud mode: using {GEMMA_MODEL} via Gemini API")
+    except Exception as e:
+        print(f"Warning: Failed to initialize cloud LLM: {e}")
+        print("Falling back to local mode if available.")
+        LLM_MODE = "local"
 
 app = FastAPI(title="MarketGuard AI Backend", description="Offline Voice-First Auditor Engine")
 
@@ -237,6 +240,14 @@ def startup_event():
     # Ensure database is initialized
     database.init_db()
 
+    # Seed test accounts with products and transactions
+    test_accounts = ["trader_a", "trader_b", "trader_c"]
+    for username in test_accounts:
+        user = database.verify_user(username, "pass1234")
+        if user:
+            database.seed_products_for_user(user["id"])
+            database.seed_transactions_for_user(user["id"])
+
 @app.get("/health")
 def health():
     llm_status = "unknown"
@@ -330,12 +341,39 @@ def clean_raw_output(raw: str, strip_json_markers: bool = True) -> str:
 
 def call_llm(text: str, system_prompt: str = None) -> str:
     sp = system_prompt if system_prompt else PROMPT_TEMPLATE
-    if LLM_MODE == "cloud":
-        import google.generativeai as genai
-        temp_model = genai.GenerativeModel(GEMMA_MODEL, system_instruction=sp)
-        response = temp_model.generate_content(text)
-        return clean_raw_output(response.text)
-    else:
+    
+    if LLM_MODE == "cloud" and genai_client:
+        try:
+            import google.generativeai as genai
+            temp_model = genai.GenerativeModel(GEMMA_MODEL, system_instruction=sp)
+            response = temp_model.generate_content(text)
+            return clean_raw_output(response.text)
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Handle specific API errors gracefully
+            if "quota" in error_msg or "429" in error_msg or "rate" in error_msg:
+                raise HTTPException(
+                    status_code=429,
+                    detail="AI service is temporarily at capacity. Please try again in a moment."
+                )
+            elif "safety" in error_msg or "blocked" in error_msg:
+                raise HTTPException(
+                    status_code=422,
+                    detail="The AI could not process that request. Please try rephrasing."
+                )
+            elif "api_key" in error_msg or "401" in error_msg or "403" in error_msg:
+                raise HTTPException(
+                    status_code=500,
+                    detail="AI service authentication failed. Please check API configuration."
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"AI service temporarily unavailable. Error: {e}"
+                )
+    
+    # Fallback to local Ollama
+    try:
         import ollama
         response = ollama.chat(
             model='gemma2:2b',
@@ -346,6 +384,11 @@ def call_llm(text: str, system_prompt: str = None) -> str:
             options={'temperature': 0.1}
         )
         return clean_raw_output(response['message']['content'])
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail="AI service unavailable. Please try again later."
+        )
 
 def extract_json_from_text(text: str) -> dict | None:
     """Try to extract a JSON object from text that may contain extra content."""

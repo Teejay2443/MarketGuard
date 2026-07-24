@@ -265,6 +265,55 @@ def seed_products_for_user(user_id: int):
     cursor.close()
     conn.close()
 
+def seed_transactions_for_user(user_id: int):
+    """Seed sample transactions so the demo account looks populated."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ph = "?" if USE_SQLITE else "%s"
+
+    # Check if user already has transactions
+    cursor.execute(f"SELECT COUNT(*) as cnt FROM transactions WHERE user_id = {ph}", (user_id,))
+    count = cursor.fetchone()[0] if cursor.fetchone() is None else 0
+    cursor.fetchall()  # consume any remaining rows
+
+    # Re-fetch count properly
+    cursor.execute(f"SELECT COUNT(*) as cnt FROM transactions WHERE user_id = {ph}", (user_id,))
+    row = cursor.fetchone()
+    cnt = row[0] if row else 0
+    if cnt > 0:
+        cursor.close()
+        conn.close()
+        return
+
+    sample_transactions = [
+        ("SALE", "Mama Ngozi", 96000, 96000, 0, [("Rice", 2, 48000)]),
+        ("CREDIT", "Iya Basira", 28500, 20000, 8500, [("Beans", 3, 9500)]),
+        ("SALE", "Chinedu", 4000, 4000, 0, [("Garri", 1, 4000)]),
+        ("RESTOCK", None, 45000, 45000, 0, [("Rice", 1, 45000)]),
+        ("SALE", "Alhaji Musa", 15000, 15000, 0, [("Palm Oil", 10, 1500)]),
+        ("CREDIT", "Funke", 9500, 5000, 4500, [("Beans", 1, 9500)]),
+    ]
+
+    for tx_type, customer, total, paid, owed, items in sample_transactions:
+        try:
+            cursor.execute(
+                f"INSERT INTO transactions (user_id, type, customer_name, total_amount, amount_paid, amount_owed) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})",
+                (user_id, tx_type, customer, total, paid, owed)
+            )
+            tx_id = cursor.lastrowid if USE_SQLITE else cursor.fetchone()["id"]
+
+            for p_name, qty, price in items:
+                cursor.execute(
+                    f"INSERT INTO transaction_items (transaction_id, product_name, quantity, unit_price) VALUES ({ph}, {ph}, {ph}, {ph})",
+                    (tx_id, p_name, qty, price)
+                )
+        except Exception:
+            pass
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 def get_product(name, user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
