@@ -2207,6 +2207,7 @@ select:focus { outline: none; border-color: var(--accent); }
 
 /* ─── Quick Action Variants ─── */
 .qa-icon.manual { background: rgba(99, 102, 241, 0.1); color: var(--color-info); }
+.qa-icon.scan { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
 
 /* ─── Logbook Photo Modal ─── */
 .logbook-modal { max-width: 600px; }

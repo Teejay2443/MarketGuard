@@ -741,6 +741,11 @@ export default function App() {
                 <div><strong>Manual Entry</strong><span>Type your transaction details</span></div>
                 <ArrowRight size={16} className="qa-arrow" />
               </button>
+              <button className="quick-action-card" onClick={() => setActiveView("inventory")}>
+                <div className="qa-icon scan"><Camera size={24} /></div>
+                <div><strong>Snap Logbook</strong><span>Photo-scan your handwritten inventory</span></div>
+                <ArrowRight size={16} className="qa-arrow" />
+              </button>
               <button className="quick-action-card" onClick={() => setActiveView("companion")}>
                 <div className="qa-icon companion"><Bot size={24} /></div>
                 <div><strong>Ask AI Companion</strong><span>Get business advice and insights</span></div>
