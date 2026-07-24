@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+python-multipart
+ollama
+faster-whisper
+psycopg2-binary
+google-generativeai
+pyjwt
+bcrypt
