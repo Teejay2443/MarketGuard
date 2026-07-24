@@ -1069,11 +1069,9 @@ export default function App() {
                   <Plus size={14} /> Add Product
                 </button>
                 <label className="btn btn-accent btn-sm" style={{ cursor: "pointer" }}>
-                  <Camera size={14} /> Scan Logbook
+                  <Camera size={14} /> Snap Logbook
                   <input ref={logbookInputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleLogbookPhoto} />
                 </label>
-              </div>
-              <div className="import-row">
                 <label className="btn btn-ghost btn-sm" style={{ cursor: "pointer" }}>
                   <Upload size={14} /> Import CSV/JSON
                   <input type="file" accept=".csv,.json" style={{ display: "none" }} onChange={(e) => setImportFile(e.target.files?.[0] || null)} />

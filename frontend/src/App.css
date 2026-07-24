@@ -2163,12 +2163,15 @@ select:focus { outline: none; border-color: var(--accent); }
 /* ─── Card Header Row ─── */
 .card-header-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: var(--sp-3);
   margin-bottom: var(--sp-4);
 }
 .import-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-3);
 }
@@ -2252,10 +2255,13 @@ select:focus { outline: none; border-color: var(--accent); }
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: white;
   border: none;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
 }
 .btn-accent:hover {
   opacity: 0.9;
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
 }
 
 /* ─── Dark mode fixes ─── */
