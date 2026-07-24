@@ -621,26 +621,66 @@ Rules:
 @app.post("/companion")
 async def companion_chat(request: QueryRequest, user: dict = Depends(require_auth)):
     try:
-        # Get recent context about the user's business
         recent_txns = database.get_all_transactions(user["id"])
         products = database.get_all_products(user["id"])
 
+        q = request.question.lower()
+        is_inventory = any(w in q for w in ["product", "stock", "inventory", "restock", "supply", "item", "goods", "remain", "left", "running out", "low", "price", "cost", "profit", "margin"])
+        is_transactions = any(w in q for w in ["sale", "sold", "sell", "transaction", "record", "daily", "today", "week", "month", "revenue", "income", "earn", "money"])
+        is_debt = any(w in q for w in ["debt", "owe", "credit", "owed", "balance", "unpaid", "customer", "owing"])
+        is_general = not is_inventory and not is_transactions and not is_debt
+
         context_parts = []
-        if recent_txns:
-            recent = recent_txns[:5]
-            context_parts.append(f"Recent transactions: {json.dumps([{'type': t['type'], 'amount': t['total_amount'], 'customer': t.get('customer_name', 'N/A')} for t in recent], default=str)}")
-        if products:
-            low_stock = [p for p in products if p['stock_quantity'] < 5]
-            if low_stock:
-                context_parts.append(f"Low stock items: {', '.join(p['name'] for p in low_stock)}")
 
+        # Always include summary stats
+        total_sales = sum(t['total_amount'] for t in recent_txns if t['type'] in ('SALE', 'CREDIT'))
         total_owed = sum(t['amount_owed'] for t in recent_txns)
-        if total_owed > 0:
-            context_parts.append(f"Total outstanding debts: ₦{total_owed:,}")
+        total_products = len(products)
+        total_stock_value = sum(p['stock_quantity'] * p['cost_price'] for p in products)
+        context_parts.append(f"SUMMARY: Total sales value: ₦{total_sales:,} | Outstanding debts: ₦{total_owed:,} | Products: {total_products} | Stock value: ₦{total_stock_value:,}")
 
-        context_str = "\n".join(context_parts) if context_parts else "No business data available yet."
+        # Inventory context — detailed when asked about inventory/products/prices
+        if is_inventory or is_general:
+            product_list = []
+            for p in products:
+                status = "LOW" if p['stock_quantity'] < 5 else "OK"
+                margin = p['selling_price'] - p['cost_price']
+                product_list.append(f"{p['name']}: {p['stock_quantity']} {p['unit']} | cost ₦{p['cost_price']:,} | sell ₦{p['selling_price']:,} | margin ₦{margin:,} | stock: {status}")
+            if product_list:
+                context_parts.append(f"INVENTORY ({len(products)} products):\n" + "\n".join(product_list))
 
-        full_prompt = f"Trader's business context:\n{context_str}\n\nTrader's question: {request.question}"
+        # Transaction context — detailed when asked about sales/transactions
+        if is_transactions or is_general:
+            sale_count = sum(1 for t in recent_txns if t['type'] == 'SALE')
+            credit_count = sum(1 for t in recent_txns if t['type'] == 'CREDIT')
+            restock_count = sum(1 for t in recent_txns if t['type'] == 'RESTOCK')
+            context_parts.append(f"TRANSACTIONS: {len(recent_txns)} total ({sale_count} sales, {credit_count} credits, {restock_count} restocks)")
+            if recent_txns:
+                recent = recent_txns[:8]
+                tx_details = []
+                for t in recent:
+                    items_str = ", ".join(f"{it['product_name']}x{it['quantity']}" for it in t.get('items', []))
+                    tx_details.append(f"  {t['type']} | {t.get('customer_name') or 'General'} | ₦{t['total_amount']:,} | paid ₦{t['amount_paid']:,} | owed ₦{t['amount_owed']:,} | {items_str}")
+                context_parts.append("Recent transactions:\n" + "\n".join(tx_details))
+
+        # Debt context — detailed when asked about debts/credits
+        if is_debt:
+            credit_txns = [t for t in recent_txns if t['type'] == 'CREDIT' and t['amount_owed'] > 0]
+            if credit_txns:
+                debt_details = []
+                for t in credit_txns:
+                    debt_details.append(f"  {t.get('customer_name') or 'Unknown'}: ₦{t['total_amount']:,} total, paid ₦{t['amount_paid']:,}, still owes ₦{t['amount_owed']:,}")
+                context_parts.append(f"CREDIT/DEBT RECORDS ({len(credit_txns)} outstanding):\n" + "\n".join(debt_details))
+            else:
+                context_parts.append("CREDIT/DEBT RECORDS: No outstanding debts. All customers have paid up!")
+
+        context_str = "\n\n".join(context_parts)
+
+        full_prompt = f"""{context_str}
+
+TRADER'S QUESTION: {request.question}
+
+Answer the trader's question using the data above. Be specific — reference actual numbers, product names, and customer names from the data."""
 
         answer = call_llm(full_prompt, system_prompt=COMPANION_PROMPT)
         return {"answer": answer}
