@@ -53,7 +53,7 @@ def test_whisper():
         return False
 
 if __name__ == "__main__":
-    print("Starting diagnostic check for OjaGuard AI dependencies...")
+    print("Starting diagnostic check for MarketGuard AI dependencies...")
     ollama_ok = test_ollama()
     whisper_ok = test_whisper()
     

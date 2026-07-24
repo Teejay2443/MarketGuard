@@ -4,7 +4,7 @@ from datetime import datetime
 from urllib.parse import urlparse, quote
 
 USE_SQLITE = os.getenv("USE_SQLITE", "true").lower() == "true"
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "ojaguard.db"))
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "marketguard.db"))
 
 def get_db_connection():
     if not USE_SQLITE:
@@ -37,7 +37,7 @@ def get_db_connection():
 
         db_host = os.getenv("DB_HOST", "localhost")
         db_port = os.getenv("DB_PORT", "5432")
-        db_name = os.getenv("DB_NAME", "ojaguard")
+        db_name = os.getenv("DB_NAME", "marketguard")
         db_user = os.getenv("DB_USER", "postgres")
         db_pass = os.getenv("DB_PASS", "postgres")
 
@@ -64,18 +64,29 @@ def init_db():
 
     if USE_SQLITE:
         cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                display_name TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
                 stock_quantity REAL DEFAULT 0,
                 unit TEXT DEFAULT 'pcs',
                 cost_price REAL DEFAULT 0,
                 selling_price REAL DEFAULT 0,
-                updated_at TEXT DEFAULT (datetime('now'))
+                updated_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(user_id, name)
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 type TEXT NOT NULL,
                 customer_name TEXT,
                 total_amount REAL DEFAULT 0,
@@ -91,30 +102,34 @@ def init_db():
                 quantity REAL NOT NULL,
                 unit_price REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                display_name TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
         """)
     else:
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                display_name VARCHAR(255) DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(255) UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name VARCHAR(255) NOT NULL,
                 stock_quantity NUMERIC DEFAULT 0,
                 unit VARCHAR(50) DEFAULT 'pcs',
                 cost_price NUMERIC DEFAULT 0,
                 selling_price NUMERIC DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, name)
             )
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 type VARCHAR(50) NOT NULL,
                 customer_name VARCHAR(255),
                 total_amount NUMERIC DEFAULT 0,
@@ -142,51 +157,139 @@ def init_db():
             )
         """)
 
-    initial_products = [
-        ("Rice", 50, "bag", 45000, 48000),
-        ("Beans", 30, "paint rubber", 8000, 9500),
-        ("Garri", 100, "paint rubber", 3500, 4000),
-        ("Palm Oil", 20, "litre", 1200, 1500),
-    ]
+    # Migration: drop old tables and recreate with user_id columns
+    conn.commit()
 
-    for name, stock, unit, cost, sell in initial_products:
-        try:
-            cursor.execute(
-                "INSERT OR IGNORE INTO products (name, stock_quantity, unit, cost_price, selling_price) VALUES (?, ?, ?, ?, ?)" if USE_SQLITE else
-                "INSERT INTO products (name, stock_quantity, unit, cost_price, selling_price) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
-                (name, stock, unit, cost, sell)
+    if USE_SQLITE:
+        cursor.executescript("""
+            DROP TABLE IF EXISTS transaction_items;
+            DROP TABLE IF EXISTS transactions;
+            DROP TABLE IF EXISTS products;
+
+            CREATE TABLE products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                stock_quantity REAL DEFAULT 0,
+                unit TEXT DEFAULT 'pcs',
+                cost_price REAL DEFAULT 0,
+                selling_price REAL DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(user_id, name)
+            );
+
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                type TEXT NOT NULL,
+                customer_name TEXT,
+                total_amount REAL DEFAULT 0,
+                amount_paid REAL DEFAULT 0,
+                amount_owed REAL DEFAULT 0,
+                timestamp TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE transaction_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_id INTEGER REFERENCES transactions(id),
+                product_name TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                unit_price REAL NOT NULL
+            );
+        """)
+    else:
+        for tbl in ["transaction_items", "transactions", "products"]:
+            cursor.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
+        conn.commit()
+
+        cursor.execute("""
+            CREATE TABLE products (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name VARCHAR(255) NOT NULL,
+                stock_quantity NUMERIC DEFAULT 0,
+                unit VARCHAR(50) DEFAULT 'pcs',
+                cost_price NUMERIC DEFAULT 0,
+                selling_price NUMERIC DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, name)
             )
-        except Exception as e:
-            print(f"Error seeding product {name}: {e}")
+        """)
+        cursor.execute("""
+            CREATE TABLE transactions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                type VARCHAR(50) NOT NULL,
+                customer_name VARCHAR(255),
+                total_amount NUMERIC DEFAULT 0,
+                amount_paid NUMERIC DEFAULT 0,
+                amount_owed NUMERIC DEFAULT 0,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE transaction_items (
+                id SERIAL PRIMARY KEY,
+                transaction_id INTEGER REFERENCES transactions(id),
+                product_name VARCHAR(255) NOT NULL,
+                quantity NUMERIC NOT NULL,
+                unit_price NUMERIC NOT NULL
+            )
+        """)
 
     conn.commit()
     cursor.close()
     conn.close()
     print(f"Database initialized ({'SQLite' if USE_SQLITE else 'PostgreSQL'})")
 
-def get_product(name):
+def seed_products_for_user(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ph = "?" if USE_SQLITE else "%s"
+    initial_products = [
+        ("Rice", 50, "bag", 45000, 48000),
+        ("Beans", 30, "paint rubber", 8000, 9500),
+        ("Garri", 100, "paint rubber", 3500, 4000),
+        ("Palm Oil", 20, "litre", 1200, 1500),
+    ]
+    for name, stock, unit, cost, sell in initial_products:
+        try:
+            cursor.execute(
+                f"INSERT OR IGNORE INTO products (user_id, name, stock_quantity, unit, cost_price, selling_price) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})" if USE_SQLITE else
+                f"INSERT INTO products (user_id, name, stock_quantity, unit, cost_price, selling_price) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}) ON CONFLICT (user_id, name) DO NOTHING",
+                (user_id, name, stock, unit, cost, sell)
+            )
+        except Exception:
+            pass
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_product(name, user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     like_op = "LIKE" if USE_SQLITE else "ILIKE"
-    cursor.execute(f"SELECT * FROM products WHERE name {like_op} ?" if USE_SQLITE else f"SELECT * FROM products WHERE name {like_op} %s", (f"%{name}%",))
+    cursor.execute(f"SELECT * FROM products WHERE name {like_op} ? AND user_id = ?" if USE_SQLITE else f"SELECT * FROM products WHERE name {like_op} %s AND user_id = %s", (f"%{name}%", user_id))
     product = dict_from_row(cursor.fetchone())
     cursor.close()
     conn.close()
     return product
 
-def get_all_products():
+def get_all_products(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM products ORDER BY name ASC")
+    ph = "?" if USE_SQLITE else "%s"
+    cursor.execute(f"SELECT * FROM products WHERE user_id = {ph} ORDER BY name ASC", (user_id,))
     products = [dict_from_row(r) for r in cursor.fetchall()]
     cursor.close()
     conn.close()
     return products
 
-def get_all_transactions():
+def get_all_transactions(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM transactions ORDER BY timestamp DESC")
+    ph = "?" if USE_SQLITE else "%s"
+    cursor.execute(f"SELECT * FROM transactions WHERE user_id = {ph} ORDER BY timestamp DESC", (user_id,))
     txs = cursor.fetchall()
 
     result = []
@@ -200,7 +303,7 @@ def get_all_transactions():
     conn.close()
     return result
 
-def add_transaction(tx_type, customer_name, total_amount, amount_paid, amount_owed, items):
+def add_transaction(user_id: int, tx_type, customer_name, total_amount, amount_paid, amount_owed, items):
     conn = get_db_connection()
     cursor = conn.cursor()
     ph = "?" if USE_SQLITE else "%s"
@@ -208,8 +311,8 @@ def add_transaction(tx_type, customer_name, total_amount, amount_paid, amount_ow
 
     try:
         cursor.execute(
-            f"INSERT INTO transactions (type, customer_name, total_amount, amount_paid, amount_owed) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}){returning}",
-            (tx_type, customer_name, total_amount, amount_paid, amount_owed)
+            f"INSERT INTO transactions (user_id, type, customer_name, total_amount, amount_paid, amount_owed) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}){returning}",
+            (user_id, tx_type, customer_name, total_amount, amount_paid, amount_owed)
         )
 
         if USE_SQLITE:
@@ -229,7 +332,7 @@ def add_transaction(tx_type, customer_name, total_amount, amount_paid, amount_ow
                 (tx_id, p_name, qty, price)
             )
 
-            prod = get_product(p_name)
+            prod = get_product(p_name, user_id)
             if prod:
                 new_qty = prod["stock_quantity"]
                 if tx_type in ["SALE", "CREDIT"]:
@@ -241,25 +344,27 @@ def add_transaction(tx_type, customer_name, total_amount, amount_paid, amount_ow
                 elif tx_type == "RESTOCK":
                     new_qty += qty
                     cursor.execute(
-                        f"UPDATE products SET stock_quantity = {ph}, cost_price = {ph}, updated_at = {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'} WHERE id = {ph}",
-                        (new_qty, price, prod["id"])
+                        f"UPDATE products SET stock_quantity = {ph}, cost_price = {ph}, updated_at = {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'} WHERE id = {ph} AND user_id = {ph}",
+                        (new_qty, price, prod["id"], user_id)
                     )
                     continue
 
                 cursor.execute(
-                    f"UPDATE products SET stock_quantity = {ph}, updated_at = {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'} WHERE id = {ph}",
-                    (new_qty, prod["id"])
+                    f"UPDATE products SET stock_quantity = {ph}, updated_at = {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'} WHERE id = {ph} AND user_id = {ph}",
+                    (new_qty, prod["id"], user_id)
                 )
             else:
                 if tx_type == "RESTOCK":
                     cursor.execute(
-                        f"INSERT OR IGNORE INTO products (name, stock_quantity, cost_price, updated_at) VALUES ({ph}, {ph}, {ph}, {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'})",
-                        (p_name, qty, price)
+                        f"INSERT OR IGNORE INTO products (user_id, name, stock_quantity, cost_price, updated_at) VALUES ({ph}, {ph}, {ph}, {ph}, {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'})" if USE_SQLITE else
+                        f"INSERT INTO products (user_id, name, stock_quantity, cost_price, updated_at) VALUES ({ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP) ON CONFLICT (user_id, name) DO NOTHING",
+                        (user_id, p_name, qty, price)
                     )
                 else:
                     cursor.execute(
-                        f"INSERT OR IGNORE INTO products (name, stock_quantity, updated_at) VALUES ({ph}, {ph}, {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'})",
-                        (p_name, -qty)
+                        f"INSERT OR IGNORE INTO products (user_id, name, stock_quantity, updated_at) VALUES ({ph}, {ph}, {ph}, {'datetime(\'now\')' if USE_SQLITE else 'CURRENT_TIMESTAMP'})" if USE_SQLITE else
+                        f"INSERT INTO products (user_id, name, stock_quantity, updated_at) VALUES ({ph}, {ph}, {ph}, CURRENT_TIMESTAMP) ON CONFLICT (user_id, name) DO NOTHING",
+                        (user_id, p_name, -qty)
                     )
 
         conn.commit()

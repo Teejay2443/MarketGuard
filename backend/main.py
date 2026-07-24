@@ -15,7 +15,7 @@ from typing import List, Optional
 import database
 
 # --- Auth ---
-SECRET_KEY = os.getenv("JWT_SECRET", "ojaguard-secret-key-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET", "marketguard-secret-key-change-in-production")
 auth_scheme = HTTPBearer(auto_error=False)
 
 # --- Mode Selection ---
@@ -26,7 +26,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
 
 PROMPT_TEMPLATE = """
-You are OjaGuard AI, a local business intelligence auditor for Nigerian micro-merchants.
+You are MarketGuard AI, a local business intelligence auditor for Nigerian micro-merchants.
 Your task is to parse unstructured text spoken by a trader (which might be in Nigerian Pidgin, Yoruba, or English) and extract a structured transaction JSON.
 
 Transaction Types:
@@ -87,7 +87,7 @@ if LLM_MODE == "cloud":
     )
     print(f"Cloud mode: using {GEMMA_MODEL} via Gemini API")
 
-app = FastAPI(title="OjaGuard AI Backend", description="Offline Voice-First Auditor Engine")
+app = FastAPI(title="MarketGuard AI Backend", description="Offline Voice-First Auditor Engine")
 
 # Enable CORS for frontend connection
 app.add_middleware(
@@ -183,6 +183,7 @@ def register(req: AuthRequest):
     user = database.create_user(req.username.strip().lower(), req.password)
     if user is None:
         raise HTTPException(status_code=409, detail="Username already taken")
+    database.seed_products_for_user(user["id"])
     token = make_token(user)
     return {"token": token, "user": user}
 
@@ -260,6 +261,7 @@ async def process_intent(request: ParseRequest, user: dict = Depends(require_aut
         parsed_json = json.loads(raw_output)
 
         tx_id, warnings = database.add_transaction(
+            user_id=user["id"],
             tx_type=parsed_json.get("type", "SALE"),
             customer_name=parsed_json.get("customer_name"),
             total_amount=parsed_json.get("total_amount", 0),
@@ -285,47 +287,50 @@ async def process_intent(request: ParseRequest, user: dict = Depends(require_aut
 
 @app.get("/inventory")
 def get_inventory(user: dict = Depends(require_auth)):
-    return database.get_all_products()
+    return database.get_all_products(user["id"])
 
 @app.get("/transactions")
 def get_transactions(user: dict = Depends(require_auth)):
-    return database.get_all_transactions()
+    return database.get_all_transactions(user["id"])
 
 DB_SCHEMA_DESC = """
 Tables:
-- products (columns: id, name, stock_quantity, unit, cost_price, selling_price, updated_at)
-- transactions (columns: id, type, customer_name, total_amount, amount_paid, amount_owed, timestamp)
+- users (columns: id, username, password_hash, display_name, created_at)
+- products (columns: id, user_id, name, stock_quantity, unit, cost_price, selling_price, updated_at)
+- transactions (columns: id, user_id, type, customer_name, total_amount, amount_paid, amount_owed, timestamp)
 - transaction_items (columns: id, transaction_id, product_name, quantity, unit_price)
 
 Notes:
+- products.name is unique per user (use UNIQUE(user_id, name))
 - transactions.type is one of: SALE, CREDIT, RESTOCK
 - amount_owed > 0 means customer still owes money
 - SALE and CREDIT decrease stock; RESTOCK increases it
-- Product names are in the 'name' column of the 'products' table
-- Item names in a transaction are in 'product_name' in 'transaction_items'
-- To find stock level: use products.stock_quantity
-- To find total sold of a product: JOIN transaction_items ON products.name = transaction_items.product_name
+- transaction_items links to transactions via transaction_id
+- Products and transactions are scoped to a user via user_id
 """
 
-SQL_PROMPT = f"""You are OjaGuard AI, a business intelligence SQL generator for a market trader's database.
+def make_sql_prompt(user_id: int) -> str:
+    return f"""You are MarketGuard AI, a business intelligence SQL generator for a market trader's database.
 {DB_SCHEMA_DESC}
-Given a question in natural language (English, Pidgin, or Yoruba), generate a SQLite query to answer it.
+IMPORTANT: Always filter by user_id = {user_id} in your queries. This user only sees their own data.
+Given a question in natural language (English, Pidgin, or Yoruba), generate a SQL query to answer it.
 Rules:
 - Return ONLY the raw SQL query, no markdown, no explanation.
 - Use only SELECT queries (never INSERT, UPDATE, DELETE).
 - Use datetime('now', 'start of day') for "today".
 - Sort results helpfully (e.g. DESC for recent).
 - Limit results to 20 rows max.
-- Use LIKE for name searches (case-insensitive matching)."""
+- Use LIKE for name searches (case-insensitive matching).
+- Always include 'WHERE user_id = {user_id}' for products and transactions tables."""
 
-NL_ANSWER_PROMPT = """You are OjaGuard AI, a friendly business assistant for a Nigerian market trader.
+NL_ANSWER_PROMPT = """You are MarketGuard AI, a friendly business assistant for a Nigerian market trader.
 Given the user's question and the data retrieved from the database, answer in plain, warm English.
 Keep it short and useful — like speaking to a trader in the market.
 If the data is empty, say so politely. Use Naira (₦) for currency amounts."""
 
 def get_safe_sqlite_connection():
     import sqlite3
-    db_path = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "ojaguard.db"))
+    db_path = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "marketguard.db"))
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
@@ -348,7 +353,7 @@ def execute_query_safe(sql: str) -> list:
 @app.post("/query")
 async def query(request: QueryRequest, user: dict = Depends(require_auth)):
     try:
-        raw = call_llm(request.question, system_prompt=SQL_PROMPT)
+        raw = call_llm(request.question, system_prompt=make_sql_prompt(user["id"]))
         sql = raw.strip()
         # Strip markdown code fences and any leading text
         if sql.startswith("```"):

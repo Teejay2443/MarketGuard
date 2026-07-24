@@ -39,15 +39,15 @@ interface Product {
 const BACKEND_URL = "http://localhost:8000";
 
 function getToken(): string | null {
-  return localStorage.getItem("ojaguard_token");
+  return localStorage.getItem("marketguard_token");
 }
 
 function setToken(t: string) {
-  localStorage.setItem("ojaguard_token", t);
+  localStorage.setItem("marketguard_token", t);
 }
 
 function clearToken() {
-  localStorage.removeItem("ojaguard_token");
+  localStorage.removeItem("marketguard_token");
 }
 
 async function apiFetch(path: string, options: RequestInit = {}) {
@@ -302,29 +302,113 @@ export default function App() {
     <div className="app-container">
 
       {!token ? (
-        <div className="auth-card">
-          <div className="auth-box">
-            <div className="auth-logo">
-              <span className="shield-icon">🛡️</span>
-              <h1>OjaGuard AI</h1>
-              <p className="subtitle">Voice Auditor for the Informal Economy</p>
+        <div className="landing-page">
+          {/* Hero */}
+          <section className="landing-hero">
+            <div className="landing-hero-content">
+              <span className="landing-shield">🛡️</span>
+              <h1>MarketGuard</h1>
+              <p className="landing-tagline">Your business speaks. AI remembers.</p>
+              <p className="landing-desc">
+                The voice-powered business assistant for Nigeria's informal economy.
+                No typing. No complicated forms. Just talk naturally in English, Pidgin, or Yoruba.
+              </p>
+              <div className="landing-cta">
+                <button className="btn btn-primary" onClick={() => setAuthMode("register")}>Get Started Free</button>
+                <button className="btn btn-landing-secondary" onClick={() => setAuthMode("login")}>Sign In</button>
+              </div>
             </div>
-            <h2>{authMode === "login" ? "Sign In" : "Create Account"}</h2>
-            <p className="section-desc">No email needed. Just pick a username and password.</p>
-            {authError && <div className="error-message">⚠️ {authError}</div>}
-            <input className="auth-input" placeholder="Username" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
-            <input className="auth-input" type="password" placeholder="Password (4+ characters)" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
-            <button className="btn btn-primary auth-btn" onClick={doAuth}>
-              {authMode === "login" ? "Sign In" : "Create Account"}
-            </button>
-            <p className="auth-toggle">
-              {authMode === "login" ? (
-                <>Don't have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("register"); setAuthError(""); }}>Create one</a></>
-              ) : (
-                <>Already have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("login"); setAuthError(""); }}>Sign in</a></>
-              )}
-            </p>
-          </div>
+            <div className="landing-hero-visual">
+              <div className="landing-phone-mockup">
+                <div className="landing-phone-header">🎤 Speak</div>
+                <div className="landing-phone-body">
+                  <div className="landing-phone-msg user-msg">"I sell two bags of rice to Mama Ngozi for 96,000"</div>
+                  <div className="landing-phone-msg ai-msg">✅ Recorded: SALE — 2 Rice, ₦96,000. Stock updated.</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Features */}
+          <section className="landing-features">
+            <h2>How it works</h2>
+            <div className="features-grid">
+              <div className="feature-card">
+                <span className="feature-icon">🎤</span>
+                <h3>Speak Naturally</h3>
+                <p>Talk in English, Nigerian Pidgin, or Yoruba. MarketGuard understands you.</p>
+              </div>
+              <div className="feature-card">
+                <span className="feature-icon">🧠</span>
+                <h3>AI Processes</h3>
+                <p>Gemma 4 extracts sales, debts, restocks — no forms to fill.</p>
+              </div>
+              <div className="feature-card">
+                <span className="feature-icon">📊</span>
+                <h3>Instant Records</h3>
+                <p>Transactions saved, inventory updated, debts tracked — automatically.</p>
+              </div>
+              <div className="feature-card">
+                <span className="feature-icon">⚠️</span>
+                <h3>Smart Alerts</h3>
+                <p>Get warned when you sell below cost or when customers owe you money.</p>
+              </div>
+              <div className="feature-card">
+                <span className="feature-icon">💬</span>
+                <h3>Ask Questions</h3>
+                <p>"How much did I sell today?" "Who owes me?" — get instant answers.</p>
+              </div>
+              <div className="feature-card">
+                <span className="feature-icon">🔒</span>
+                <h3>Privacy First</h3>
+                <p>Your data is yours. Each trader has their own private workspace.</p>
+              </div>
+            </div>
+          </section>
+
+          {/* Test accounts */}
+          <section className="landing-test-accounts">
+            <h2>Try it now — Demo accounts</h2>
+            <p>No signup needed. Use these test accounts to explore MarketGuard:</p>
+            <div className="test-accounts-grid">
+              <div className="test-account-card">
+                <strong>trader_a</strong> / pass1234
+              </div>
+              <div className="test-account-card">
+                <strong>trader_b</strong> / pass1234
+              </div>
+              <div className="test-account-card">
+                <strong>trader_c</strong> / pass1234
+              </div>
+            </div>
+          </section>
+
+          {/* Login/Register */}
+          <section className="landing-auth-section">
+            <div className="auth-box">
+              <h2>{authMode === "login" ? "Sign In" : "Create Account"}</h2>
+              <p className="section-desc">No email needed. Just pick a username and password.</p>
+              {authError && <div className="error-message">⚠️ {authError}</div>}
+              <input className="auth-input" placeholder="Username" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
+              <input className="auth-input" type="password" placeholder="Password (4+ characters)" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} />
+              <button className="btn btn-primary auth-btn" onClick={doAuth}>
+                {authMode === "login" ? "Sign In" : "Create Account"}
+              </button>
+              <p className="auth-toggle">
+                {authMode === "login" ? (
+                  <>Don't have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("register"); setAuthError(""); }}>Create one</a></>
+                ) : (
+                  <>Already have an account? <a href="#" onClick={(e) => { e.preventDefault(); setAuthMode("login"); setAuthError(""); }}>Sign in</a></>
+                )}
+              </p>
+            </div>
+          </section>
+
+          {/* Footer */}
+          <footer className="landing-footer">
+            <p>MarketGuard — Built for Nigeria's 40 million micro-merchants</p>
+            <p>Powered by Gemma 4. Hackathon MVP.</p>
+          </footer>
         </div>
       ) : (
         <>
@@ -332,7 +416,7 @@ export default function App() {
         <div className="logo-section">
           <div className="shield-icon">🛡️</div>
           <div>
-            <h1>OjaGuard AI</h1>
+            <h1>MarketGuard</h1>
             <p className="subtitle">Voice Auditor for the Informal Economy</p>
           </div>
         </div>
