@@ -104,6 +104,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const [mode, setMode] = useState("local");
+  const [sttMode, setSttMode] = useState("local");
   const [inventory, setInventory] = useState<Product[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [parsedResult, setParsedResult] = useState<{
@@ -142,6 +143,7 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/health`);
       const data = await res.json();
       if (data.mode) setMode(data.mode);
+      if (data.stt) setSttMode(data.stt);
     } catch { /* ignore */ }
   };
 
@@ -457,12 +459,18 @@ export default function App() {
               <span>{user.display_name || user.username}</span>
             </div>
           )}
-          <div className="sidebar-footer-row">
-            <ThemeToggle />
+          <div className="mode-stack">
             <div className="mode-badge">
               <span className="pulse-dot" />
-              {mode === "cloud" ? "Cloud" : "Local"}
+              LLM: {mode === "cloud" ? "Cloud" : "Local"}
             </div>
+            <div className="mode-badge stt">
+              <span className="pulse-dot" />
+              STT: {sttMode === "cloud" ? "Cloud" : "Local"}
+            </div>
+          </div>
+          <div className="sidebar-footer-row">
+            <ThemeToggle />
             <button className="btn-ghost" onClick={logout} title="Sign out"><LogOut size={14} /></button>
           </div>
         </div>

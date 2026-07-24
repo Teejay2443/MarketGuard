@@ -25,6 +25,12 @@ LLM_MODE = os.getenv("LLM_MODE", "local").lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
 
+# --- STT Mode Selection ---
+# STT_MODE = "local"  -> uses faster-whisper (runs locally, no API key needed)
+# STT_MODE = "cloud"  -> uses Google Cloud Speech-to-Text (better for Nigerian languages)
+STT_MODE = os.getenv("STT_MODE", "local").lower()
+GOOGLE_STT_API_KEY = os.getenv("GOOGLE_STT_API_KEY", "")
+
 PROMPT_TEMPLATE = """
 You are MarketGuard AI, a local business intelligence auditor for Nigerian micro-merchants.
 Your task is to parse unstructured text spoken by a trader (which might be in Nigerian Pidgin, Yoruba, or English) and extract a structured transaction JSON.
@@ -106,14 +112,89 @@ def get_whisper():
     if whisper_model is None:
         try:
             from faster_whisper import WhisperModel
-            # Using CPU and int8 quantization to save memory on standard local laptops
-            print("Loading Whisper model...")
+            print("Loading Whisper model (local STT)...")
             whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
             print("Whisper model loaded successfully!")
         except Exception as e:
             print(f"Error loading Whisper model: {e}")
             raise HTTPException(status_code=500, detail=f"Whisper STT engine failed to load: {e}")
     return whisper_model
+
+def transcribe_cloud(audio_path: str) -> dict:
+    """Transcribe audio using Google Cloud Speech-to-Text API.
+    
+    Supports Nigerian languages (Yoruba, Pidgin English) with enhanced models.
+    Falls back to basic model if enhanced is unavailable.
+    """
+    import requests
+    
+    if not GOOGLE_STT_API_KEY:
+        raise HTTPException(status_code=500, detail="GOOGLE_STT_API_KEY is not set for cloud STT mode")
+    
+    # Read audio file as base64
+    import base64
+    with open(audio_path, "rb") as f:
+        audio_content = base64.b64encode(f.read()).decode("utf-8")
+    
+    # Google Cloud Speech-to-Text API
+    url = f"https://speech.googleapis.com/v1/speech:recognize?key={GOOGLE_STT_API_KEY}"
+    
+    # Try enhanced model first (supports more languages), fall back to default
+    configs_to_try = [
+        {
+            "config": {
+                "encoding": "LINEAR16",
+                "sampleRateHertz": 16000,
+                "languageCode": "en-NG",  # English (Nigeria)
+                "alternativeLanguageCodes": ["yo-NG", "ha-NG"],  # Yoruba, Hausa
+                "model": "latest_long",
+                "useEnhanced": True,
+                "enableAutomaticPunctuation": True,
+            }
+        },
+        {
+            "config": {
+                "encoding": "LINEAR16",
+                "sampleRateHertz": 16000,
+                "languageCode": "en-US",
+                "model": "default",
+                "enableAutomaticPunctuation": True,
+            }
+        }
+    ]
+    
+    last_error = None
+    for config in configs_to_try:
+        body = {
+            "audio": {"content": audio_content},
+            **config
+        }
+        
+        try:
+            resp = requests.post(url, json=body, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                if results:
+                    transcript = results[0]["alternatives"][0]["transcript"]
+                    confidence = results[0]["alternatives"][0].get("confidence", 0.0)
+                    language = results[0].get("languageCode", "en")
+                    return {
+                        "transcription": transcript,
+                        "language": language,
+                        "language_probability": confidence
+                    }
+            else:
+                last_error = resp.text
+                continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+    
+    raise HTTPException(
+        status_code=500,
+        detail=f"Google Cloud STT failed. Last error: {last_error}"
+    )
 
 class ParseRequest(BaseModel):
     text: str
@@ -169,11 +250,23 @@ def health():
     except Exception as e:
         llm_status = f"disconnected: {e}"
 
+    stt_status = "unknown"
+    if STT_MODE == "cloud":
+        stt_status = "connected" if GOOGLE_STT_API_KEY else "not configured"
+    else:
+        try:
+            from faster_whisper import WhisperModel
+            stt_status = "connected"
+        except ImportError:
+            stt_status = "not installed"
+
     return {
         "status": "healthy",
         "database": "connected",
         "mode": LLM_MODE,
-        "llm": llm_status
+        "llm": llm_status,
+        "stt": STT_MODE,
+        "stt_status": stt_status
     }
 
 @app.post("/auth/register")
@@ -201,25 +294,25 @@ def me(user: dict = Depends(require_auth)):
 
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...), user: dict = Depends(require_auth)):
-    # Save uploaded file temporarily
     suffix = os.path.splitext(file.filename)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
         shutil.copyfileobj(file.file, tmp_file)
         tmp_path = tmp_file.name
 
     try:
-        model = get_whisper()
-        # Transcribe audio file
-        # task="transcribe" preserves Yoruba/Pidgin, task="translate" translates to English
-        # For a localized experience, we transcribe the native tongue and let Gemma interpret it.
-        segments, info = model.transcribe(tmp_path, beam_size=5)
-        transcription = " ".join([segment.text for segment in segments])
-        
-        return {
-            "transcription": transcription,
-            "language": info.language,
-            "language_probability": info.language_probability
-        }
+        if STT_MODE == "cloud":
+            return transcribe_cloud(tmp_path)
+        else:
+            model = get_whisper()
+            segments, info = model.transcribe(tmp_path, beam_size=5)
+            transcription = " ".join([segment.text for segment in segments])
+            return {
+                "transcription": transcription,
+                "language": info.language,
+                "language_probability": info.language_probability
+            }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
     finally:

@@ -1635,9 +1635,25 @@ a:hover {
   padding: 0 var(--sp-2);
 }
 
-.sidebar-footer-row .mode-badge {
-  flex: 1;
+.mode-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+}
+
+.mode-stack .mode-badge {
   justify-content: center;
+}
+
+.mode-badge.stt {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--restock);
+  border-color: rgba(99, 102, 241, 0.2);
+}
+
+[data-theme="dark"] .mode-badge.stt {
+  background: rgba(99, 102, 241, 0.12);
 }
 
 .sidebar-footer-row .btn-ghost {
