@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  Shield, Mic, MicOff, Send, MessageSquare, Package,
+  Shield, Mic, MicOff, Send, Package,
   Receipt, AlertTriangle, CheckCircle2, LogOut, TrendingUp,
   CircleDollarSign, Users, Sparkles,
   ArrowRight, Loader2, Clock, BarChart3, Sun, Moon,
+  LayoutDashboard, Bot, History, ClipboardList,
 } from "lucide-react";
 import "./App.css";
 
@@ -43,6 +44,8 @@ interface Product {
   selling_price: number;
 }
 
+type SidebarView = "dashboard" | "voice" | "transactions" | "inventory" | "companion";
+
 const BACKEND_URL = "http://localhost:8000";
 
 /* ─── Auth helpers ─── */
@@ -75,7 +78,6 @@ async function apiFetch(path: string, options: RequestInit = {}) {
 
 /* ─── App ─── */
 export default function App() {
-  /* Theme: light default */
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     return (localStorage.getItem("marketguard_theme") as "light" | "dark") || "light";
   });
@@ -105,15 +107,19 @@ export default function App() {
   const [inventory, setInventory] = useState<Product[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [parsedResult, setParsedResult] = useState<{
-    transaction_id: number;
+    transaction_id: number | null;
     parsed_data: ParsedData;
     warnings: string[];
+    hallucination?: boolean;
   } | null>(null);
 
-  const [queryInput, setQueryInput] = useState("");
-  const [queryLoading, setQueryLoading] = useState(false);
-  const [chatHistory, setChatHistory] = useState<{ q: string; a: string }[]>([]);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [activeView, setActiveView] = useState<SidebarView>("dashboard");
+
+  /* Companion chat */
+  const [companionInput, setCompanionInput] = useState("");
+  const [companionLoading, setCompanionLoading] = useState(false);
+  const [companionHistory, setCompanionHistory] = useState<{ q: string; a: string }[]>([]);
+  const companionEndRef = useRef<HTMLDivElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -128,8 +134,8 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory]);
+    companionEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [companionHistory]);
 
   const fetchMode = async () => {
     try {
@@ -142,8 +148,7 @@ export default function App() {
   const fetchInventory = async () => {
     try {
       const res = await apiFetch("/inventory");
-      const data = await res.json();
-      setInventory(data);
+      setInventory(await res.json());
     } catch (err) {
       console.error("Failed to fetch inventory", err);
     }
@@ -152,8 +157,7 @@ export default function App() {
   const fetchTransactions = async () => {
     try {
       const res = await apiFetch("/transactions");
-      const data = await res.json();
-      setTransactions(data);
+      setTransactions(await res.json());
     } catch (err) {
       console.error("Failed to fetch transactions", err);
     }
@@ -202,7 +206,7 @@ export default function App() {
     setTransactions([]);
     setInventory([]);
     setParsedResult(null);
-    setChatHistory([]);
+    setCompanionHistory([]);
   };
 
   const startRecording = async () => {
@@ -277,34 +281,34 @@ export default function App() {
     }
   };
 
-  const sendQuery = useCallback(async () => {
-    const q = queryInput.trim();
-    if (!q || queryLoading) return;
-    setQueryLoading(true);
-    setChatHistory((prev) => [...prev, { q, a: "Thinking..." }]);
-    setQueryInput("");
+  const sendCompanion = useCallback(async () => {
+    const q = companionInput.trim();
+    if (!q || companionLoading) return;
+    setCompanionLoading(true);
+    setCompanionHistory((prev) => [...prev, { q, a: "Thinking..." }]);
+    setCompanionInput("");
     try {
-      const res = await apiFetch("/query", {
+      const res = await apiFetch("/companion", {
         method: "POST",
         body: JSON.stringify({ question: q }),
       });
-      if (!res.ok) throw new Error("Query failed");
+      if (!res.ok) throw new Error("Companion query failed");
       const data = await res.json();
-      setChatHistory((prev) => {
+      setCompanionHistory((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = { q, a: data.answer };
         return updated;
       });
     } catch (err: unknown) {
-      setChatHistory((prev) => {
+      setCompanionHistory((prev) => {
         const updated = [...prev];
-        updated[updated.length - 1] = { q, a: `Sorry, I couldn't answer that. ${err instanceof Error ? err.message : ""}` };
+        updated[updated.length - 1] = { q, a: `Sorry, I couldn't respond. ${err instanceof Error ? err.message : ""}` };
         return updated;
       });
     } finally {
-      setQueryLoading(false);
+      setCompanionLoading(false);
     }
-  }, [queryInput, queryLoading]);
+  }, [companionInput, companionLoading]);
 
   /* ─── Computed stats ─── */
   const totalSales = transactions
@@ -319,199 +323,86 @@ export default function App() {
     </button>
   );
 
+  const sidebarItems: { id: SidebarView; icon: typeof LayoutDashboard; label: string }[] = [
+    { id: "dashboard", icon: LayoutDashboard, label: "Dashboard" },
+    { id: "voice", icon: Mic, label: "Record" },
+    { id: "transactions", icon: History, label: "Transactions" },
+    { id: "inventory", icon: ClipboardList, label: "Inventory" },
+    { id: "companion", icon: Bot, label: "AI Companion" },
+  ];
+
   /* ─── Landing Page ─── */
   if (!token) {
     return (
       <div className="landing-page">
-        {/* Nav */}
         <nav className="landing-nav">
           <div className="landing-logo">
-            <div className="logo-mark">
-              <Shield size={18} color="white" />
-            </div>
+            <div className="logo-mark"><Shield size={18} color="white" /></div>
             <span>MarketGuard</span>
           </div>
           <div className="landing-nav-actions">
             <ThemeToggle />
-            <button className="btn btn-ghost btn-sm" onClick={() => setAuthMode("login")}>
-              Sign In
-            </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setAuthMode("register")}>
-              Get Started
-            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setAuthMode("login")}>Sign In</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setAuthMode("register")}>Get Started</button>
           </div>
         </nav>
 
-        {/* Hero */}
         <section className="landing-hero">
           <div className="hero-content">
-            <div className="hero-badge">
-              <span className="badge-dot" />
-              Powered by Gemma 4
-            </div>
-            <h1>
-              Your business speaks.<br />
-              <span className="gradient-text">AI remembers.</span>
-            </h1>
+            <div className="hero-badge"><span className="badge-dot" />Powered by Gemma 4</div>
+            <h1>Your business speaks.<br /><span className="gradient-text">AI remembers.</span></h1>
             <p className="hero-desc">
               The voice-powered business assistant for Nigeria's informal economy.
-              No typing. No complicated forms. Just talk naturally in English,
-              Pidgin, or Yoruba.
+              No typing. No complicated forms. Just talk naturally in English, Pidgin, or Yoruba.
             </p>
             <div className="hero-actions">
-              <button className="btn btn-primary" onClick={() => setAuthMode("register")}>
-                Start Free <ArrowRight size={16} />
-              </button>
-              <button className="btn btn-secondary" onClick={() => setAuthMode("login")}>
-                Sign In
-              </button>
+              <button className="btn btn-primary" onClick={() => setAuthMode("register")}>Start Free <ArrowRight size={16} /></button>
+              <button className="btn btn-secondary" onClick={() => setAuthMode("login")}>Sign In</button>
             </div>
           </div>
           <div className="hero-visual">
             <div className="phone-mockup">
-              <div className="phone-notch">
-                <div className="phone-notch-bar" />
-              </div>
-              <div className="phone-header">
-                <Mic size={16} />
-                Voice Transaction
-              </div>
+              <div className="phone-notch"><div className="phone-notch-bar" /></div>
+              <div className="phone-header"><Mic size={16} />Voice Transaction</div>
               <div className="phone-body">
-                <div className="phone-msg phone-msg-user">
-                  "I sell two bags of rice to Mama Ngozi for 96,000"
-                </div>
-                <div className="phone-msg phone-msg-ai success">
-                  ✅ Recorded: SALE — 2 Rice, ₦96,000. Stock updated.
-                </div>
-                <div className="phone-msg phone-msg-user">
-                  "How much did I sell today?"
-                </div>
-                <div className="phone-msg phone-msg-ai">
-                  You sold ₦152,000 today across 3 transactions.
-                </div>
+                <div className="phone-msg phone-msg-user">"I sell two bags of rice to Mama Ngozi for 96,000"</div>
+                <div className="phone-msg phone-msg-ai success">✅ Recorded: SALE — 2 Rice, ₦96,000. Stock updated.</div>
+                <div className="phone-msg phone-msg-user">"How much did I sell today?"</div>
+                <div className="phone-msg phone-msg-ai">You sold ₦152,000 today across 3 transactions.</div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Features */}
         <section className="landing-features">
-          <div className="section-header">
-            <h2>How it works</h2>
-            <p>Speak naturally. MarketGuard handles the rest.</p>
-          </div>
+          <div className="section-header"><h2>How it works</h2><p>Speak naturally. MarketGuard handles the rest.</p></div>
           <div className="features-grid">
-            <div className="feature-card">
-              <div className="feature-icon"><Mic size={20} /></div>
-              <h3>Speak Naturally</h3>
-              <p>Talk in English, Nigerian Pidgin, or Yoruba. MarketGuard understands you.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon"><Sparkles size={20} /></div>
-              <h3>AI Processes</h3>
-              <p>Gemma 4 extracts sales, debts, restocks — no forms to fill.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon"><BarChart3 size={20} /></div>
-              <h3>Instant Records</h3>
-              <p>Transactions saved, inventory updated, debts tracked — automatically.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon"><AlertTriangle size={20} /></div>
-              <h3>Smart Alerts</h3>
-              <p>Get warned when you sell below cost or when customers owe you money.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon"><MessageSquare size={20} /></div>
-              <h3>Ask Questions</h3>
-              <p>"How much did I sell today?" "Who owes me?" — get instant answers.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon"><Shield size={20} /></div>
-              <h3>Privacy First</h3>
-              <p>Your data is yours. Each trader has their own private workspace.</p>
-            </div>
+            <div className="feature-card"><div className="feature-icon"><Mic size={20} /></div><h3>Speak Naturally</h3><p>Talk in English, Nigerian Pidgin, or Yoruba. MarketGuard understands you.</p></div>
+            <div className="feature-card"><div className="feature-icon"><Sparkles size={20} /></div><h3>AI Processes</h3><p>Gemma 4 extracts sales, debts, restocks — no forms to fill.</p></div>
+            <div className="feature-card"><div className="feature-icon"><BarChart3 size={20} /></div><h3>Instant Records</h3><p>Transactions saved, inventory updated, debts tracked — automatically.</p></div>
+            <div className="feature-card"><div className="feature-icon"><AlertTriangle size={20} /></div><h3>Smart Alerts</h3><p>Get warned when you sell below cost or when customers owe you money.</p></div>
+            <div className="feature-card"><div className="feature-icon"><Bot size={20} /></div><h3>AI Companion</h3><p>Your personal business advisor — ask anything, get smart guidance.</p></div>
+            <div className="feature-card"><div className="feature-icon"><Shield size={20} /></div><h3>Privacy First</h3><p>Your data is yours. Each trader has their own private workspace.</p></div>
           </div>
         </section>
 
-        {/* Demo Accounts */}
         <section className="landing-demo">
-          <div className="section-header">
-            <h2>Try it now</h2>
-            <p>Click a demo account to auto-fill credentials.</p>
-          </div>
+          <div className="section-header"><h2>Try it now</h2><p>Click a demo account to auto-fill credentials.</p></div>
           <div className="demo-cards">
-            <button
-              type="button"
-              className="demo-card"
-              onClick={() => {
-                setAuthMode("login");
-                setAuthUsername("trader_a");
-                setAuthPassword("pass1234");
-                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
-              }}
-            >
-              <span className="demo-user">trader_a</span>
-              <span className="demo-pass">pass1234</span>
-            </button>
-            <button
-              type="button"
-              className="demo-card"
-              onClick={() => {
-                setAuthMode("login");
-                setAuthUsername("trader_b");
-                setAuthPassword("pass1234");
-                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
-              }}
-            >
-              <span className="demo-user">trader_b</span>
-              <span className="demo-pass">pass1234</span>
-            </button>
-            <button
-              type="button"
-              className="demo-card"
-              onClick={() => {
-                setAuthMode("login");
-                setAuthUsername("trader_c");
-                setAuthPassword("pass1234");
-                window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" });
-              }}
-            >
-              <span className="demo-user">trader_c</span>
-              <span className="demo-pass">pass1234</span>
-            </button>
+            <button type="button" className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_a"); setAuthPassword("pass1234"); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" }); }}><span className="demo-user">trader_a</span><span className="demo-pass">pass1234</span></button>
+            <button type="button" className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_b"); setAuthPassword("pass1234"); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" }); }}><span className="demo-user">trader_b</span><span className="demo-pass">pass1234</span></button>
+            <button type="button" className="demo-card" onClick={() => { setAuthMode("login"); setAuthUsername("trader_c"); setAuthPassword("pass1234"); window.scrollTo({ top: document.getElementById("auth-section")?.offsetTop ?? 0, behavior: "smooth" }); }}><span className="demo-user">trader_c</span><span className="demo-pass">pass1234</span></button>
           </div>
         </section>
 
-        {/* Auth */}
         <section className="landing-auth" id="auth-section">
           <div className="card auth-card">
             <h2>{authMode === "login" ? "Welcome back" : "Create your account"}</h2>
-            <p className="auth-subtitle">
-              {authMode === "login" ? "Sign in to your workspace" : "No email needed. Just a username and password."}
-            </p>
+            <p className="auth-subtitle">{authMode === "login" ? "Sign in to your workspace" : "No email needed. Just a username and password."}</p>
             {authError && <div className="error-banner"><AlertTriangle size={14} /> {authError}</div>}
             <div className="auth-fields">
-              <div className="text-field">
-                <label>Username</label>
-                <input
-                  placeholder="Enter your username"
-                  value={authUsername}
-                  onChange={(e) => setAuthUsername(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }}
-                  autoFocus
-                />
-              </div>
-              <div className="text-field">
-                <label>Password</label>
-                <input
-                  type="password"
-                  placeholder="4+ characters"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }}
-                />
-              </div>
+              <div className="text-field"><label>Username</label><input placeholder="Enter your username" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} autoFocus /></div>
+              <div className="text-field"><label>Password</label><input type="password" placeholder="4+ characters" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doAuth(); }} /></div>
             </div>
             <button className="btn btn-primary btn-full" onClick={doAuth} disabled={authLoading} style={{ marginTop: 16 }}>
               {authLoading ? <Loader2 size={16} className="spin" /> : authMode === "login" ? "Sign In" : "Create Account"}
@@ -526,7 +417,6 @@ export default function App() {
           </div>
         </section>
 
-        {/* Footer */}
         <footer className="landing-footer">
           <p><span className="footer-brand">MarketGuard</span> — Built for Nigeria's 40 million micro-merchants</p>
           <p>Powered by Gemma 4. Hackathon MVP.</p>
@@ -535,343 +425,391 @@ export default function App() {
     );
   }
 
-  /* ─── Dashboard ─── */
+  /* ─── Sidebar + Dashboard ─── */
   return (
-    <div className="app-container">
-      {/* Header */}
-      <header className="app-header">
-        <div className="logo-section">
-          <div className="logo-mark">
-            <Shield size={20} color="white" />
-          </div>
-          <div>
-            <h1>MarketGuard</h1>
-            <span className="header-subtitle">Voice Auditor for the Informal Economy</span>
-          </div>
+    <div className="shell">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-logo">
+          <div className="logo-mark"><Shield size={18} color="white" /></div>
+          <span className="sidebar-logo-text">MarketGuard</span>
         </div>
-        <div className="header-right">
-          <ThemeToggle />
-          <div className="mode-badge">
-            <span className="pulse-dot" />
-            {mode === "cloud" ? "Cloud" : "Local"}
-          </div>
+
+        <nav className="sidebar-nav">
+          {sidebarItems.map((item) => (
+            <button
+              key={item.id}
+              className={`sidebar-item ${activeView === item.id ? "active" : ""}`}
+              onClick={() => setActiveView(item.id)}
+            >
+              <item.icon size={18} />
+              <span>{item.label}</span>
+              {item.id === "companion" && <span className="sidebar-badge">AI</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-divider" />
           {user && (
             <div className="user-chip">
               <div className="avatar">{(user.display_name || user.username)[0].toUpperCase()}</div>
-              {user.display_name || user.username}
+              <span>{user.display_name || user.username}</span>
             </div>
           )}
-          <button className="btn-ghost" onClick={logout}>
-            <LogOut size={14} />
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      {/* Stats Row */}
-      <div className="stats-row" style={{ marginBottom: "var(--sp-6)" }}>
-        <div className="stat-card">
-          <div className="stat-label"><TrendingUp size={14} /> Total Sales</div>
-          <div className="stat-value sale">₦{totalSales.toLocaleString()}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label"><CircleDollarSign size={14} /> Outstanding</div>
-          <div className="stat-value danger">₦{totalOwed.toLocaleString()}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label"><Receipt size={14} /> Transactions</div>
-          <div className="stat-value">{transactionCount}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label"><Package size={14} /> Products</div>
-          <div className="stat-value info">{inventory.length}</div>
-        </div>
-      </div>
-
-      {/* Main Grid */}
-      <div className="dashboard-grid">
-        {/* Voice Recording */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <div className="card-title"><Mic size={18} /> Record Transaction</div>
-              <div className="card-subtitle">Speak in Yoruba, Pidgin, or English</div>
+          <div className="sidebar-footer-row">
+            <ThemeToggle />
+            <div className="mode-badge">
+              <span className="pulse-dot" />
+              {mode === "cloud" ? "Cloud" : "Local"}
             </div>
+            <button className="btn-ghost" onClick={logout} title="Sign out"><LogOut size={14} /></button>
           </div>
+        </div>
+      </aside>
 
-          <div className="voice-area">
-            <div className="mic-wrapper">
-              <button
-                className={`mic-button ${isRecording ? "recording" : ""}`}
-                onClick={isRecording ? stopRecording : startRecording}
-                disabled={isLoading}
-              >
-                {isRecording ? <MicOff size={32} /> : <Mic size={32} />}
+      {/* Main Content */}
+      <main className="main-content">
+        {/* ─── Dashboard View ─── */}
+        {activeView === "dashboard" && (
+          <>
+            <div className="page-header">
+              <h2>Dashboard</h2>
+              <p className="page-subtitle">Your business at a glance</p>
+            </div>
+
+            <div className="stats-row">
+              <div className="stat-card">
+                <div className="stat-label"><TrendingUp size={14} /> Total Sales</div>
+                <div className="stat-value sale">₦{totalSales.toLocaleString()}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label"><CircleDollarSign size={14} /> Outstanding</div>
+                <div className="stat-value danger">₦{totalOwed.toLocaleString()}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label"><Receipt size={14} /> Transactions</div>
+                <div className="stat-value">{transactionCount}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label"><Package size={14} /> Products</div>
+                <div className="stat-value info">{inventory.length}</div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="quick-actions">
+              <button className="quick-action-card" onClick={() => setActiveView("voice")}>
+                <div className="qa-icon"><Mic size={24} /></div>
+                <div><strong>Record Transaction</strong><span>Speak to log a sale or restock</span></div>
+                <ArrowRight size={16} className="qa-arrow" />
               </button>
-              <div className="mic-ring" />
+              <button className="quick-action-card" onClick={() => setActiveView("companion")}>
+                <div className="qa-icon companion"><Bot size={24} /></div>
+                <div><strong>Ask AI Companion</strong><span>Get business advice and insights</span></div>
+                <ArrowRight size={16} className="qa-arrow" />
+              </button>
             </div>
-            <p className={`mic-label ${isRecording ? "recording" : ""}`}>
-              {isRecording ? "Listening... Click to stop" : isLoading ? "Processing..." : "Click to speak"}
-            </p>
-          </div>
 
-          {audioUrl && (
-            <div className="audio-player">
-              <audio src={audioUrl} controls />
-            </div>
-          )}
-
-          {error && (
-            <div className="error-banner">
-              <AlertTriangle size={14} /> {error}
-            </div>
-          )}
-
-          <div className="input-group">
-            <label className="input-label" htmlFor="transcription-input">Transcription</label>
-            <textarea
-              id="transcription-input"
-              className="textarea-field"
-              value={transcription}
-              onChange={(e) => setTranscription(e.target.value)}
-              placeholder="Your spoken transaction will appear here..."
-              disabled={isLoading}
-            />
-            <button
-              className="btn btn-primary btn-full"
-              onClick={processTextIntent}
-              disabled={isLoading || !transcription.trim()}
-            >
-              {isLoading ? (
-                <><Loader2 size={16} className="spin" /> Processing with Gemma...</>
-              ) : (
-                <><CheckCircle2 size={16} /> Confirm & Parse Transaction</>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Parsed Output / Alerts */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <div className="card-title"><Sparkles size={18} /> Intelligence & Alerts</div>
-              <div className="card-subtitle">AI-decoded transaction details</div>
-            </div>
-          </div>
-
-          {parsedResult ? (
-            <div className="parsed-output">
-              <div className="parsed-header">
-                <h3>Transaction Decoded</h3>
-                <span className={`badge badge-${parsedResult.parsed_data.type}`}>
-                  {parsedResult.parsed_data.type}
-                </span>
+            {/* Recent Transactions */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title"><Clock size={18} /> Recent Transactions</div>
+                <button className="btn btn-ghost btn-sm" onClick={() => setActiveView("transactions")}>View all</button>
               </div>
-
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">Customer</span>
-                  <span className="detail-value">{parsedResult.parsed_data.customer_name || "General / Cash"}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Total Value</span>
-                  <span className="detail-value highlight">₦{parsedResult.parsed_data.total_amount.toLocaleString()}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Amount Paid</span>
-                  <span className="detail-value">₦{parsedResult.parsed_data.amount_paid.toLocaleString()}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Amount Owed</span>
-                  <span className={`detail-value ${parsedResult.parsed_data.amount_owed > 0 ? "danger" : ""}`}>
-                    ₦{parsedResult.parsed_data.amount_owed.toLocaleString()}
-                  </span>
-                </div>
-              </div>
-
-              <div className="items-section">
-                <h4>Items</h4>
-                {parsedResult.parsed_data.items.map((item, idx) => (
-                  <div className="item-row" key={idx}>
-                    <span className="item-name">{item.name} × {item.quantity}</span>
-                    <span className="item-price">₦{(item.quantity * item.unit_price).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-
-              {parsedResult.warnings && parsedResult.warnings.length > 0 ? (
-                <div className="warnings-box">
-                  <h4><AlertTriangle size={14} /> Audit Alerts</h4>
-                  <ul>
-                    {parsedResult.warnings.map((w, idx) => (
-                      <li key={idx}>{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <div className="clean-audit">
-                  <CheckCircle2 size={16} /> Audit clean — prices match restock rates
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <div className="empty-icon"><BarChart3 size={24} /></div>
-              <div className="empty-title">No transaction parsed yet</div>
-              <div className="empty-desc">Record or type a transaction to see AI-powered analysis here.</div>
-            </div>
-          )}
-        </div>
-
-        {/* Transaction History */}
-        <div className="card span-full">
-          <div className="card-header">
-            <div>
-              <div className="card-title"><Clock size={18} /> Transaction History</div>
-              <div className="card-subtitle">All recorded transactions</div>
-            </div>
-          </div>
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Type</th>
-                  <th>Customer</th>
-                  <th>Items</th>
-                  <th className="text-right">Total</th>
-                  <th className="text-right">Paid</th>
-                  <th className="text-right">Owed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="table-empty">No transactions recorded yet.</td>
-                  </tr>
-                ) : (
-                  transactions.map((tx) => (
-                    <tr key={tx.id}>
-                      <td><Clock size={12} style={{ marginRight: 6, opacity: 0.4 }} />{new Date(tx.timestamp).toLocaleTimeString()}</td>
-                      <td><span className={`badge badge-${tx.type}`}>{tx.type}</span></td>
-                      <td className="text-primary">{tx.customer_name || "General"}</td>
-                      <td>{tx.items?.map((it) => `${it.name} (${it.quantity})`).join(", ") || "—"}</td>
-                      <td className="text-right text-primary">₦{tx.total_amount.toLocaleString()}</td>
-                      <td className="text-right">₦{tx.amount_paid.toLocaleString()}</td>
-                      <td className={`text-right ${tx.amount_owed > 0 ? "text-danger" : ""}`}>
-                        ₦{tx.amount_owed.toLocaleString()}
-                      </td>
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Type</th>
+                      <th>Customer</th>
+                      <th className="text-right">Total</th>
+                      <th className="text-right">Owed</th>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Inventory */}
-        <div className="card span-full">
-          <div className="card-header">
-            <div>
-              <div className="card-title"><Package size={18} /> Product Inventory</div>
-              <div className="card-subtitle">Stock levels and cost baselines</div>
-            </div>
-          </div>
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th className="text-right">Stock</th>
-                  <th>Unit</th>
-                  <th className="text-right">Cost Price</th>
-                  <th className="text-right">Selling Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inventory.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="table-empty">No products in inventory yet.</td>
-                  </tr>
-                ) : (
-                  inventory.map((prod) => (
-                    <tr key={prod.id}>
-                      <td className="text-primary">{prod.name}</td>
-                      <td className="text-right">{prod.stock_quantity}</td>
-                      <td>{prod.unit}</td>
-                      <td className="text-right">₦{prod.cost_price.toLocaleString()}</td>
-                      <td className="text-right">₦{prod.selling_price.toLocaleString()}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Q&A Chat */}
-        <div className="card span-full">
-          <div className="card-header">
-            <div>
-              <div className="card-title"><MessageSquare size={18} /> Ask Your Business</div>
-              <div className="card-subtitle">Ask anything — "Who owes me?" "How much did I sell today?"</div>
-            </div>
-          </div>
-
-          <div className="chat-container">
-            {chatHistory.length === 0 ? (
-              <div className="chat-empty">
-                <div className="empty-icon"><MessageSquare size={24} /></div>
-                <div className="empty-title">Ask a question</div>
-                <div className="empty-desc">Get instant answers about your sales, debts, and inventory.</div>
+                  </thead>
+                  <tbody>
+                    {transactions.length === 0 ? (
+                      <tr><td colSpan={5} className="table-empty">No transactions yet. Record your first one!</td></tr>
+                    ) : (
+                      transactions.slice(0, 5).map((tx) => (
+                        <tr key={tx.id}>
+                          <td><Clock size={12} style={{ marginRight: 6, opacity: 0.4 }} />{new Date(tx.timestamp).toLocaleTimeString()}</td>
+                          <td><span className={`badge badge-${tx.type}`}>{tx.type}</span></td>
+                          <td className="text-primary">{tx.customer_name || "General"}</td>
+                          <td className="text-right text-primary">₦{tx.total_amount.toLocaleString()}</td>
+                          <td className={`text-right ${tx.amount_owed > 0 ? "text-danger" : ""}`}>₦{tx.amount_owed.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
-            ) : (
-              <div className="chat-messages">
-                {chatHistory.map((msg, idx) => (
-                  <div className="chat-msg-group" key={idx}>
-                    <div className="chat-bubble chat-bubble-user">
-                      <Users size={12} style={{ marginRight: 6, opacity: 0.7 }} />
-                      {msg.q}
+            </div>
+
+            {/* Low Stock Alert */}
+            {inventory.filter((p) => p.stock_quantity < 5).length > 0 && (
+              <div className="card warning-card">
+                <div className="card-title"><AlertTriangle size={18} /> Low Stock Alert</div>
+                <div className="low-stock-list">
+                  {inventory.filter((p) => p.stock_quantity < 5).map((p) => (
+                    <div key={p.id} className="low-stock-item">
+                      <span>{p.name}</span>
+                      <span className="text-danger">{p.stock_quantity} {p.unit} left</span>
                     </div>
-                    <div className="chat-bubble chat-bubble-ai">
-                      <Sparkles size={12} style={{ marginRight: 6, opacity: 0.5 }} />
-                      {msg.a}
-                    </div>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
+                  ))}
+                </div>
               </div>
             )}
-            <div className="chat-input-row">
-              <input
-                className="chat-input"
-                value={queryInput}
-                onChange={(e) => setQueryInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") sendQuery(); }}
-                placeholder="Ask a question about your business..."
-                disabled={queryLoading}
-              />
-              <button
-                className="btn btn-primary"
-                onClick={sendQuery}
-                disabled={queryLoading || !queryInput.trim()}
-              >
-                {queryLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+          </>
+        )}
 
-      {/* Spin animation */}
+        {/* ─── Voice Recording View ─── */}
+        {activeView === "voice" && (
+          <>
+            <div className="page-header">
+              <h2>Record Transaction</h2>
+              <p className="page-subtitle">Speak in Yoruba, Pidgin, or English</p>
+            </div>
+
+            <div className="voice-layout">
+              <div className="card voice-card">
+                <div className="voice-area">
+                  <div className="mic-wrapper">
+                    <button
+                      className={`mic-button ${isRecording ? "recording" : ""}`}
+                      onClick={isRecording ? stopRecording : startRecording}
+                      disabled={isLoading}
+                    >
+                      {isRecording ? <MicOff size={32} /> : <Mic size={32} />}
+                    </button>
+                    <div className="mic-ring" />
+                  </div>
+                  <p className={`mic-label ${isRecording ? "recording" : ""}`}>
+                    {isRecording ? "Listening... Click to stop" : isLoading ? "Processing..." : "Click to speak"}
+                  </p>
+                </div>
+
+                {audioUrl && (
+                  <div className="audio-player"><audio src={audioUrl} controls /></div>
+                )}
+
+                {error && <div className="error-banner"><AlertTriangle size={14} /> {error}</div>}
+
+                {parsedResult?.hallucination && (
+                  <div className="hallucination-notice">
+                    <AlertTriangle size={14} />
+                    <span>AI couldn't parse the transaction perfectly. Please rephrase or try again.</span>
+                  </div>
+                )}
+
+                <div className="input-group">
+                  <label className="input-label" htmlFor="transcription-input">Transcription</label>
+                  <textarea
+                    id="transcription-input"
+                    className="textarea-field"
+                    value={transcription}
+                    onChange={(e) => setTranscription(e.target.value)}
+                    placeholder="Your spoken transaction will appear here..."
+                    disabled={isLoading}
+                  />
+                  <button className="btn btn-primary btn-full" onClick={processTextIntent} disabled={isLoading || !transcription.trim()}>
+                    {isLoading ? <><Loader2 size={16} className="spin" /> Processing with Gemma...</> : <><CheckCircle2 size={16} /> Confirm & Parse Transaction</>}
+                  </button>
+                </div>
+              </div>
+
+              <div className="card">
+                {parsedResult ? (
+                  <div className="parsed-output">
+                    <div className="parsed-header">
+                      <h3>Transaction Decoded</h3>
+                      <span className={`badge badge-${parsedResult.parsed_data.type}`}>{parsedResult.parsed_data.type}</span>
+                    </div>
+                    <div className="detail-grid">
+                      <div className="detail-item"><span className="detail-label">Customer</span><span className="detail-value">{parsedResult.parsed_data.customer_name || "General / Cash"}</span></div>
+                      <div className="detail-item"><span className="detail-label">Total Value</span><span className="detail-value highlight">₦{parsedResult.parsed_data.total_amount.toLocaleString()}</span></div>
+                      <div className="detail-item"><span className="detail-label">Amount Paid</span><span className="detail-value">₦{parsedResult.parsed_data.amount_paid.toLocaleString()}</span></div>
+                      <div className="detail-item"><span className="detail-label">Amount Owed</span><span className={`detail-value ${parsedResult.parsed_data.amount_owed > 0 ? "danger" : ""}`}>₦{parsedResult.parsed_data.amount_owed.toLocaleString()}</span></div>
+                    </div>
+                    <div className="items-section">
+                      <h4>Items</h4>
+                      {parsedResult.parsed_data.items.map((item, idx) => (
+                        <div className="item-row" key={idx}>
+                          <span className="item-name">{item.name} × {item.quantity}</span>
+                          <span className="item-price">₦{(item.quantity * item.unit_price).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {parsedResult.warnings && parsedResult.warnings.length > 0 ? (
+                      <div className="warnings-box">
+                        <h4><AlertTriangle size={14} /> Audit Alerts</h4>
+                        <ul>{parsedResult.warnings.map((w, idx) => <li key={idx}>{w}</li>)}</ul>
+                      </div>
+                    ) : (
+                      <div className="clean-audit"><CheckCircle2 size={16} /> Audit clean — prices match restock rates</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-icon"><BarChart3 size={24} /></div>
+                    <div className="empty-title">No transaction parsed yet</div>
+                    <div className="empty-desc">Record a transaction to see AI-powered analysis here.</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─── Transactions View ─── */}
+        {activeView === "transactions" && (
+          <>
+            <div className="page-header">
+              <h2>Transaction History</h2>
+              <p className="page-subtitle">All recorded transactions</p>
+            </div>
+            <div className="card">
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Type</th>
+                      <th>Customer</th>
+                      <th>Items</th>
+                      <th className="text-right">Total</th>
+                      <th className="text-right">Paid</th>
+                      <th className="text-right">Owed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transactions.length === 0 ? (
+                      <tr><td colSpan={7} className="table-empty">No transactions recorded yet.</td></tr>
+                    ) : (
+                      transactions.map((tx) => (
+                        <tr key={tx.id}>
+                          <td><Clock size={12} style={{ marginRight: 6, opacity: 0.4 }} />{new Date(tx.timestamp).toLocaleString()}</td>
+                          <td><span className={`badge badge-${tx.type}`}>{tx.type}</span></td>
+                          <td className="text-primary">{tx.customer_name || "General"}</td>
+                          <td>{tx.items?.map((it) => `${it.name} (${it.quantity})`).join(", ") || "—"}</td>
+                          <td className="text-right text-primary">₦{tx.total_amount.toLocaleString()}</td>
+                          <td className="text-right">₦{tx.amount_paid.toLocaleString()}</td>
+                          <td className={`text-right ${tx.amount_owed > 0 ? "text-danger" : ""}`}>₦{tx.amount_owed.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─── Inventory View ─── */}
+        {activeView === "inventory" && (
+          <>
+            <div className="page-header">
+              <h2>Product Inventory</h2>
+              <p className="page-subtitle">Stock levels and cost baselines</p>
+            </div>
+            <div className="card">
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th className="text-right">Stock</th>
+                      <th>Unit</th>
+                      <th className="text-right">Cost Price</th>
+                      <th className="text-right">Selling Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inventory.length === 0 ? (
+                      <tr><td colSpan={5} className="table-empty">No products in inventory yet.</td></tr>
+                    ) : (
+                      inventory.map((prod) => (
+                        <tr key={prod.id}>
+                          <td className="text-primary">{prod.name}</td>
+                          <td className={`text-right ${prod.stock_quantity < 5 ? "text-danger" : ""}`}>{prod.stock_quantity}</td>
+                          <td>{prod.unit}</td>
+                          <td className="text-right">₦{prod.cost_price.toLocaleString()}</td>
+                          <td className="text-right">₦{prod.selling_price.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─── AI Companion View ─── */}
+        {activeView === "companion" && (
+          <>
+            <div className="page-header">
+              <h2>AI Companion</h2>
+              <p className="page-subtitle">Your personal business advisor</p>
+            </div>
+
+            <div className="companion-layout">
+              <div className="card companion-card">
+                {companionHistory.length === 0 ? (
+                  <div className="companion-welcome">
+                    <div className="companion-avatar-large"><Bot size={40} /></div>
+                    <h3>Hi! I'm your MarketGuard AI Companion</h3>
+                    <p>Ask me anything about your business — pricing strategy, debt management, inventory tips, or just for encouragement.</p>
+                    <div className="companion-suggestions">
+                      <button className="suggestion-chip" onClick={() => { setCompanionInput("What should I do about customers who owe me money?"); }}>
+                        <CircleDollarSign size={14} /> Debt management tips
+                      </button>
+                      <button className="suggestion-chip" onClick={() => { setCompanionInput("How can I increase my sales this week?"); }}>
+                        <TrendingUp size={14} /> Boost my sales
+                      </button>
+                      <button className="suggestion-chip" onClick={() => { setCompanionInput("What products should I restock?"); }}>
+                        <Package size={14} /> Restock advice
+                      </button>
+                      <button className="suggestion-chip" onClick={() => { setCompanionInput("Give me a motivation to keep going!"); }}>
+                        <Sparkles size={14} /> Motivate me
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="companion-messages">
+                    {companionHistory.map((msg, idx) => (
+                      <div className="chat-msg-group" key={idx}>
+                        <div className="chat-bubble chat-bubble-user"><Users size={12} style={{ marginRight: 6, opacity: 0.7 }} />{msg.q}</div>
+                        <div className="chat-bubble chat-bubble-ai"><Bot size={12} style={{ marginRight: 6, opacity: 0.5 }} />{msg.a}</div>
+                      </div>
+                    ))}
+                    <div ref={companionEndRef} />
+                  </div>
+                )}
+
+                <div className="companion-input-row">
+                  <input
+                    className="chat-input"
+                    value={companionInput}
+                    onChange={(e) => setCompanionInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") sendCompanion(); }}
+                    placeholder="Ask your AI companion..."
+                    disabled={companionLoading}
+                  />
+                  <button className="btn btn-primary" onClick={sendCompanion} disabled={companionLoading || !companionInput.trim()}>
+                    {companionLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+
       <style>{`
-        .spin {
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );

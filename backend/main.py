@@ -254,11 +254,87 @@ def call_llm(text: str, system_prompt: str = None) -> str:
         )
         return clean_raw_output(response['message']['content'])
 
+def extract_json_from_text(text: str) -> dict | None:
+    """Try to extract a JSON object from text that may contain extra content."""
+    text = text.strip()
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Try to find JSON object in the text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+    return None
+
+REPAIR_PROMPT = """You previously output invalid JSON. You MUST fix it.
+Output ONLY the raw JSON object. No markdown, no explanation, no code fences.
+The previous invalid output was:
+{raw_output}
+
+Fix it and output ONLY valid JSON matching this schema:
+{{
+  "type": "SALE" | "CREDIT" | "RESTOCK",
+  "customer_name": "string or null",
+  "total_amount": number,
+  "amount_paid": number,
+  "amount_owed": number,
+  "items": [{{ "name": "string", "quantity": number, "unit_price": number }}]
+}}"""
+
+FALLBACK_DATA = {
+    "type": "SALE",
+    "customer_name": None,
+    "total_amount": 0,
+    "amount_paid": 0,
+    "amount_owed": 0,
+    "items": []
+}
+
 @app.post("/process-intent")
 async def process_intent(request: ParseRequest, user: dict = Depends(require_auth)):
+    raw_output = ""
     try:
+        # Attempt 1: Normal LLM call
         raw_output = call_llm(request.text)
-        parsed_json = json.loads(raw_output)
+        parsed_json = extract_json_from_text(raw_output)
+
+        # Attempt 2: If invalid, try repair prompt
+        if parsed_json is None:
+            repair_msg = REPAIR_PROMPT.format(raw_output=raw_output)
+            raw_output = call_llm(repair_msg)
+            parsed_json = extract_json_from_text(raw_output)
+
+        # Attempt 3: If still invalid, try one more time with stricter prompt
+        if parsed_json is None:
+            strict_prompt = f"""Output ONLY valid JSON. No text before or after. No markdown.
+Transaction: {request.text}
+{{
+  "type": "SALE",
+  "customer_name": null,
+  "total_amount": 0,
+  "amount_paid": 0,
+  "amount_owed": 0,
+  "items": []
+}}"""
+            raw_output = call_llm(strict_prompt, system_prompt="You are a JSON parser. Output ONLY valid JSON. Nothing else.")
+            parsed_json = extract_json_from_text(raw_output)
+
+        # Final fallback: Return with warning if all attempts fail
+        if parsed_json is None:
+            return {
+                "success": True,
+                "transaction_id": None,
+                "parsed_data": FALLBACK_DATA,
+                "warnings": ["AI could not parse the transaction. Please rephrase and try again."],
+                "raw_output": raw_output,
+                "hallucination": True
+            }
 
         tx_id, warnings = database.add_transaction(
             user_id=user["id"],
@@ -274,14 +350,10 @@ async def process_intent(request: ParseRequest, user: dict = Depends(require_aut
             "success": True,
             "transaction_id": tx_id,
             "parsed_data": parsed_json,
-            "warnings": warnings
+            "warnings": warnings,
+            "hallucination": False
         }
 
-    except json.JSONDecodeError as jde:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse LLM output as JSON. Output was: {raw_output}. Error: {jde}"
-        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM Processing error: {e}")
 
@@ -292,6 +364,53 @@ def get_inventory(user: dict = Depends(require_auth)):
 @app.get("/transactions")
 def get_transactions(user: dict = Depends(require_auth)):
     return database.get_all_transactions(user["id"])
+
+COMPANION_PROMPT = """You are MarketGuard AI Companion — a friendly, knowledgeable business advisor for a Nigerian market trader.
+
+You help with:
+- Business strategy and pricing decisions
+- Managing debts and credit customers
+- Inventory optimization
+- Market trends and competitive insights
+- Financial literacy basics
+- Motivation and encouragement
+
+Rules:
+- Be warm, friendly, and encouraging — like a trusted business partner
+- Use simple English (no jargon). Pidgin is OK occasionally for warmth.
+- Reference the trader's actual data when relevant (use Naira ₦ for amounts)
+- Keep responses concise (2-4 sentences max unless detail is needed)
+- If asked about something outside your scope, gently redirect to business topics
+- Never make up data — if you don't know, say so honestly"""
+
+@app.post("/companion")
+async def companion_chat(request: QueryRequest, user: dict = Depends(require_auth)):
+    try:
+        # Get recent context about the user's business
+        recent_txns = database.get_all_transactions(user["id"])
+        products = database.get_all_products(user["id"])
+
+        context_parts = []
+        if recent_txns:
+            recent = recent_txns[:5]
+            context_parts.append(f"Recent transactions: {json.dumps([{'type': t['type'], 'amount': t['total_amount'], 'customer': t.get('customer_name', 'N/A')} for t in recent], default=str)}")
+        if products:
+            low_stock = [p for p in products if p['stock_quantity'] < 5]
+            if low_stock:
+                context_parts.append(f"Low stock items: {', '.join(p['name'] for p in low_stock)}")
+
+        total_owed = sum(t['amount_owed'] for t in recent_txns)
+        if total_owed > 0:
+            context_parts.append(f"Total outstanding debts: ₦{total_owed:,}")
+
+        context_str = "\n".join(context_parts) if context_parts else "No business data available yet."
+
+        full_prompt = f"Trader's business context:\n{context_str}\n\nTrader's question: {request.question}"
+
+        answer = call_llm(full_prompt, system_prompt=COMPANION_PROMPT)
+        return {"answer": answer}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Companion error: {e}")
 
 DB_SCHEMA_DESC = """
 Tables:
