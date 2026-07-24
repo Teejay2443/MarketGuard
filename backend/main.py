@@ -422,10 +422,20 @@ Rules:
 @app.post("/parse-logbook")
 async def parse_logbook_image(file: UploadFile = File(...), user: dict = Depends(require_auth)):
     """Parse a photo of a handwritten logbook and extract inventory items."""
-    if LLM_MODE != "cloud" or not genai_client:
+    # Try to re-init client if key is available but client was not created
+    global genai_client
+    if genai_client is None and GEMINI_API_KEY and LLM_MODE == "cloud":
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            genai_client = genai.GenerativeModel(GEMMA_MODEL, system_instruction=PROMPT_TEMPLATE)
+        except Exception:
+            pass
+
+    if not genai_client:
         raise HTTPException(
             status_code=400,
-            detail="Logbook photo parsing requires cloud mode (Gemini API). Set LLM_MODE=cloud."
+            detail="Logbook photo parsing requires Gemini API. Set GEMINI_API_KEY and LLM_MODE=cloud."
         )
 
     content = await file.read()
@@ -834,7 +844,13 @@ Notes:
 def make_sql_prompt(user_id: int) -> str:
     return f"""You are MarketGuard AI, a business intelligence SQL generator for a market trader's database.
 {DB_SCHEMA_DESC}
-IMPORTANT: Always filter by user_id = {user_id} in your queries. This user only sees their own data.
+CRITICAL SECURITY RULES:
+- Always filter by user_id = {user_id} in your queries. This user only sees their own data.
+- You MUST include 'WHERE user_id = {user_id}' for products and transactions tables.
+- NEVER use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, EXEC, GRANT, REVOKE, or UNION.
+- ONLY generate SELECT queries. Nothing else.
+- NEVER access the users table directly (no password_hash exposure).
+
 Given a question in natural language (English, Pidgin, or Yoruba), generate a SQL query to answer it.
 Rules:
 - Return ONLY the raw SQL query, no markdown, no explanation.
@@ -842,8 +858,7 @@ Rules:
 - Use datetime('now', 'start of day') for "today".
 - Sort results helpfully (e.g. DESC for recent).
 - Limit results to 20 rows max.
-- Use LIKE for name searches (case-insensitive matching).
-- Always include 'WHERE user_id = {user_id}' for products and transactions tables."""
+- Use LIKE for name searches (case-insensitive matching)."""
 
 NL_ANSWER_PROMPT = """You are MarketGuard AI, a friendly business assistant for a Nigerian market trader.
 Given the user's question and the data retrieved from the database, answer in plain, warm English.
@@ -858,9 +873,29 @@ def get_safe_sqlite_connection():
     return conn
 
 def execute_query_safe(sql: str) -> list:
+    """Execute a SQL query with strict safety guardrails."""
     sql_upper = sql.strip().upper()
+
+    # Only allow SELECT
     if not sql_upper.startswith("SELECT"):
         raise HTTPException(status_code=400, detail="Only SELECT queries are allowed")
+
+    # Block dangerous keywords
+    blocked = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",
+               "EXEC", "EXECUTE", "GRANT", "REVOKE", "COPY", "LOAD", "UNION"]
+    for keyword in blocked:
+        # Check for keyword as whole word (not substring)
+        if f" {keyword} " in f" {sql_upper} ":
+            raise HTTPException(status_code=400, detail=f"Forbidden SQL keyword: {keyword}")
+
+    # Enforce user_id filter for data tables
+    if "USER_ID" not in sql_upper and ("PRODUCTS" in sql_upper or "TRANSACTIONS" in sql_upper):
+        raise HTTPException(status_code=400, detail="Queries must filter by user_id")
+
+    # Limit results
+    if "LIMIT" not in sql_upper:
+        sql = sql.strip().rstrip(";") + " LIMIT 50"
+
     conn = get_safe_sqlite_connection()
     try:
         cursor = conn.cursor()
