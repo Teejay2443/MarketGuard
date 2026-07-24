@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Shield, Mic, MicOff, Send, Package,
   Receipt, AlertTriangle, CheckCircle2, LogOut, TrendingUp,
-  CircleDollarSign, Users, Sparkles, FileDown, Upload,
+  CircleDollarSign, Users, Sparkles, FileDown, Upload, Camera,
   ArrowRight, Loader2, Clock, BarChart3, Sun, Moon,
   LayoutDashboard, Bot, History, ClipboardList, Pencil, Trash2, Plus,
   ChevronLeft, ChevronRight,
@@ -167,6 +167,15 @@ export default function App() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [newProduct, setNewProduct] = useState({ name: "", stock_quantity: 0, unit: "pcs", cost_price: 0, selling_price: 0 });
   const [importFile, setImportFile] = useState<File | null>(null);
+
+  /* ─── Logbook Photo state ─── */
+  const [showLogbookModal, setShowLogbookModal] = useState(false);
+  const [logbookImage, setLogbookImage] = useState<string | null>(null);
+  const [logbookFile, setLogbookFile] = useState<File | null>(null);
+  const [logbookParsing, setLogbookParsing] = useState(false);
+  const [logbookParsedItems, setLogbookParsedItems] = useState<{ name: string; stock_quantity: number; unit: string; cost_price: number; selling_price: number }[]>([]);
+  const [logbookError, setLogbookError] = useState<string | null>(null);
+  const logbookInputRef = useRef<HTMLInputElement>(null);
 
   /* Companion chat */
   const [companionInput, setCompanionInput] = useState("");
@@ -430,6 +439,69 @@ export default function App() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Import failed.");
     }
+  };
+
+  /* ─── Logbook Photo Parsing ─── */
+  const handleLogbookPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogbookFile(file);
+    setLogbookImage(URL.createObjectURL(file));
+    setLogbookParsedItems([]);
+    setLogbookError(null);
+    setShowLogbookModal(true);
+  };
+
+  const parseLogbookImage = async () => {
+    if (!logbookFile) return;
+    setLogbookParsing(true);
+    setLogbookError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", logbookFile);
+      const res = await apiFetch("/parse-logbook", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to parse image.");
+      if (!data.success) throw new Error(data.message || "Could not read logbook.");
+      setLogbookParsedItems(data.items);
+    } catch (err: unknown) {
+      setLogbookError(err instanceof Error ? err.message : "Failed to parse logbook image.");
+    } finally {
+      setLogbookParsing(false);
+    }
+  };
+
+  const confirmLogbookItems = async () => {
+    if (logbookParsedItems.length === 0) return;
+    setLogbookParsing(true);
+    try {
+      const res = await apiFetch("/parse-logbook/confirm", {
+        method: "POST",
+        body: JSON.stringify({ items: logbookParsedItems }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to save.");
+      alert(`Saved ${data.saved} products to inventory!`);
+      setShowLogbookModal(false);
+      setLogbookImage(null);
+      setLogbookFile(null);
+      setLogbookParsedItems([]);
+      fetchInventory();
+    } catch (err: unknown) {
+      setLogbookError(err instanceof Error ? err.message : "Failed to save items.");
+    } finally {
+      setLogbookParsing(false);
+    }
+  };
+
+  const updateLogbookItem = (idx: number, field: string, value: string | number) => {
+    const updated = [...logbookParsedItems];
+    (updated[idx] as Record<string, unknown>)[field] = value;
+    setLogbookParsedItems(updated);
+  };
+
+  const removeLogbookItem = (idx: number) => {
+    setLogbookParsedItems(logbookParsedItems.filter((_, i) => i !== idx));
   };
 
   const sendCompanion = useCallback(async () => {
@@ -992,9 +1064,15 @@ export default function App() {
             </div>
 
             <div className="card-header-row">
-              <button className="btn btn-primary btn-sm" onClick={() => { setEditingProduct(null); setNewProduct({ name: "", stock_quantity: 0, unit: "pcs", cost_price: 0, selling_price: 0 }); setShowAddProduct(true); }}>
-                <Plus size={14} /> Add Product
-              </button>
+              <div className="import-row">
+                <button className="btn btn-primary btn-sm" onClick={() => { setEditingProduct(null); setNewProduct({ name: "", stock_quantity: 0, unit: "pcs", cost_price: 0, selling_price: 0 }); setShowAddProduct(true); }}>
+                  <Plus size={14} /> Add Product
+                </button>
+                <label className="btn btn-accent btn-sm" style={{ cursor: "pointer" }}>
+                  <Camera size={14} /> Scan Logbook
+                  <input ref={logbookInputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleLogbookPhoto} />
+                </label>
+              </div>
               <div className="import-row">
                 <label className="btn btn-ghost btn-sm" style={{ cursor: "pointer" }}>
                   <Upload size={14} /> Import CSV/JSON
@@ -1010,6 +1088,66 @@ export default function App() {
                 }}><FileDown size={14} /> Export PDF</button>
               </div>
             </div>
+
+            {/* Logbook Photo Modal */}
+            {showLogbookModal && (
+              <div className="modal-overlay" onClick={() => { setShowLogbookModal(false); setLogbookImage(null); setLogbookFile(null); setLogbookParsedItems([]); setLogbookError(null); }}>
+                <div className="card modal-card logbook-modal" onClick={(e) => e.stopPropagation()}>
+                  <h3><Camera size={18} /> Scan Handwritten Logbook</h3>
+                  <p className="auth-subtitle">Take a photo or upload an image of your handwritten inventory log. Gemma will read it and extract your products.</p>
+
+                  {logbookImage && (
+                    <div className="logbook-preview">
+                      <img src={logbookImage} alt="Logbook" />
+                    </div>
+                  )}
+
+                  {logbookError && <div className="error-banner"><AlertTriangle size={14} /> {logbookError}</div>}
+
+                  {!logbookParsedItems.length && !logbookParsing && (
+                    <button className="btn btn-primary btn-full" onClick={parseLogbookImage} disabled={!logbookFile}>
+                      <Sparkles size={14} /> Parse with AI Vision
+                    </button>
+                  )}
+
+                  {logbookParsing && (
+                    <div className="logbook-loading">
+                      <Loader2 size={24} className="spin" />
+                      <p>Gemma is reading your logbook...</p>
+                    </div>
+                  )}
+
+                  {logbookParsedItems.length > 0 && (
+                    <>
+                      <div className="logbook-results-header">
+                        <span className="text-primary">{logbookParsedItems.length} products found</span>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setLogbookParsedItems([...logbookParsedItems, { name: "", stock_quantity: 0, unit: "pcs", cost_price: 0, selling_price: 0 }])}>
+                          <Plus size={14} /> Add Row
+                        </button>
+                      </div>
+                      <div className="logbook-items-list">
+                        {logbookParsedItems.map((item, idx) => (
+                          <div className="logbook-item-row" key={idx}>
+                            <input className="item-field item-name-input" placeholder="Name" value={item.name} onChange={(e) => updateLogbookItem(idx, "name", e.target.value)} />
+                            <input className="item-field item-qty-input" type="number" min="0" placeholder="Qty" value={item.stock_quantity} onChange={(e) => updateLogbookItem(idx, "stock_quantity", Number(e.target.value))} />
+                            <input className="item-field" style={{ flex: 1 }} placeholder="Unit" value={item.unit} onChange={(e) => updateLogbookItem(idx, "unit", e.target.value)} />
+                            <input className="item-field item-price-input" type="number" min="0" placeholder="Cost ₦" value={item.cost_price} onChange={(e) => updateLogbookItem(idx, "cost_price", Number(e.target.value))} />
+                            <input className="item-field item-price-input" type="number" min="0" placeholder="Sell ₦" value={item.selling_price} onChange={(e) => updateLogbookItem(idx, "selling_price", Number(e.target.value))} />
+                            <button className="btn-icon danger" onClick={() => removeLogbookItem(idx)}><Trash2 size={14} /></button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="modal-actions">
+                        <button className="btn btn-ghost" onClick={() => { setShowLogbookModal(false); setLogbookImage(null); setLogbookFile(null); setLogbookParsedItems([]); }}>Cancel</button>
+                        <button className="btn btn-primary" onClick={confirmLogbookItems} disabled={logbookParsing}>
+                          {logbookParsing ? <><Loader2 size={14} className="spin" /> Saving...</> : <><CheckCircle2 size={14} /> Save to Inventory</>}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Add/Edit Product Modal */}
             {showAddProduct && (

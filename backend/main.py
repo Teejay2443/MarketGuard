@@ -390,6 +390,134 @@ def call_llm(text: str, system_prompt: str = None) -> str:
             detail="AI service unavailable. Please try again later."
         )
 
+LOGBOOK_PROMPT = """You are MarketGuard AI, a vision-powered business assistant for Nigerian market traders.
+
+A trader has taken a photo of their handwritten inventory logbook. Your job is to read the handwritten text in the image and extract ALL inventory items into structured JSON.
+
+The logbook may contain:
+- Product names (English, Pidgin, or Yoruba)
+- Quantities and units (bags, pieces, litres, paint rubber, crates, etc.)
+- Prices (cost price, selling price) — may be in Naira (₦) format
+- Stock levels
+- Notes in any combination
+
+You MUST output ONLY a valid JSON array of objects matching this schema:
+[
+  {
+    "name": "standardized product name (capitalized, English)",
+    "stock_quantity": number (0 if not visible),
+    "unit": "pcs" | "bag" | "litre" | "crate" | "paint rubber" | "kg" | "dozen" | "carton" | "tubers",
+    "cost_price": number (0 if not visible),
+    "selling_price": number (0 if not visible)
+  }
+]
+
+Rules:
+1. If a price looks like "45k" or "45,000", interpret as 45000 (Naira)
+2. If only one price is shown, use it as selling_price (set cost_price to 0)
+3. Standardize product names to English: "ewa" -> "Beans", "iresi" -> "Rice", "epo pupa" -> "Palm Oil", "garri" -> "Garri"
+4. If you see "2 bags" or "2 bags of rice", quantity=2, unit="bag", name="Rice"
+5. Output ONLY the raw JSON array. No markdown, no explanation, no code fences."""
+
+@app.post("/parse-logbook")
+async def parse_logbook_image(file: UploadFile = File(...), user: dict = Depends(require_auth)):
+    """Parse a photo of a handwritten logbook and extract inventory items."""
+    if LLM_MODE != "cloud" or not genai_client:
+        raise HTTPException(
+            status_code=400,
+            detail="Logbook photo parsing requires cloud mode (Gemini API). Set LLM_MODE=cloud."
+        )
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=400, detail="Image too large. Max 10MB.")
+
+    import google.generativeai as genai
+    import PIL.Image
+    import io
+
+    try:
+        image = PIL.Image.open(io.BytesIO(content))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file. Please upload a photo.")
+
+    model = genai.GenerativeModel(GEMMA_MODEL)
+
+    try:
+        response = model.generate_content(
+            [LOGBOOK_PROMPT, image],
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=4096,
+            )
+        )
+        raw = clean_raw_output(response.text)
+
+        # Try to extract JSON array
+        parsed = None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            # Try to find array in the text
+            start = raw.find("[")
+            end = raw.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    parsed = json.loads(raw[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+
+        if parsed is None or not isinstance(parsed, list):
+            return {
+                "success": False,
+                "items": [],
+                "raw_output": raw,
+                "message": "AI could not read the logbook. Please try a clearer photo or adjust the lighting."
+            }
+
+        # Filter out empty items
+        valid_items = [item for item in parsed if isinstance(item, dict) and item.get("name", "").strip()]
+
+        return {
+            "success": True,
+            "items": valid_items,
+            "count": len(valid_items),
+            "message": f"Found {len(valid_items)} products in your logbook."
+        }
+
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "quota" in error_msg or "429" in error_msg:
+            raise HTTPException(status_code=429, detail="AI service at capacity. Try again in a moment.")
+        raise HTTPException(status_code=500, detail=f"Failed to parse image: {e}")
+
+@app.post("/parse-logbook/confirm")
+async def confirm_logbook_items(
+    request_data: dict = None,
+    user: dict = Depends(require_auth)
+):
+    """Confirm and save parsed logbook items to inventory."""
+    items = request_data.get("items", []) if request_data else []
+    if not items:
+        raise HTTPException(status_code=400, detail="No items to save.")
+
+    saved = 0
+    for item in items:
+        try:
+            database.add_product(
+                user["id"],
+                item.get("name", ""),
+                item.get("stock_quantity", 0),
+                item.get("unit", "pcs"),
+                item.get("cost_price", 0),
+                item.get("selling_price", 0),
+            )
+            saved += 1
+        except Exception:
+            pass  # Skip duplicates silently
+
+    return {"saved": saved, "total": len(items)}
+
 def extract_json_from_text(text: str) -> dict | None:
     """Try to extract a JSON object from text that may contain extra content."""
     text = text.strip()

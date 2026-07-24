@@ -9,3 +9,4 @@ google-generativeai
 pyjwt
 bcrypt
 requests
+Pillow
